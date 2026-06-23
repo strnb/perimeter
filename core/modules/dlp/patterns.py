@@ -13,3 +13,10 @@ SSH_PATTERNS = [
     "-----BEGIN DSA PRIVATE KEY-----",
     "-----BEGIN EC PRIVATE KEY-----",
 ]
+
+PASSWORD_PATTERNS = [
+    r'(?i)(password|passwd|pwd)\s*=\s*["\']?[^\s"\']{6,}',
+    r'(?i)(secret|api_key|apikey|token)\s*=\s*["\']?[^\s"\']{6,}',
+]
+
+PASSWORD_EXCLUSIONS = ["", "None", "null", "your_password_here", "<password>"]
