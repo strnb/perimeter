@@ -3,20 +3,18 @@ from modules.scanner.port_scanner import scan_ports
 
 
 async def main():
-    # Полная подсеть локалхоста (254 хоста)
-    target_cidr = "127.0.0.0/24"
+    target = "127.0.0.1"
+    print(f"[*] Запуск финального сканирования на {target}...")
 
-    print(f"[*] Запуск нагрузочного теста на CIDR: {target_cidr}")
+    # Проверяем SSH, HTTP, HTTPS и Redis локально
+    detected = await scan_ports(target, ports=[22, 80, 443, 6379, 27017])
 
-    # Сканируем стандартный список (11 портов). Итого 254 * 11 = 2794 проверки!
-    # Ограничиваем concurrency в 100 потоков
-    results = await scan_ports(target_cidr, max_concurrency=100)
-
-    print("\n=== РЕЗУЛЬТАТЫ СКАНИРОВАНИЯ ===")
-    if not results:
-        print("[-] Открытых портов в подсети не обнаружено (или всё заблокировано).")
-    for host, open_ports in results.items():
-        print(f"[+] {host} -> Открыты: {open_ports}")
+    print("\n" + "=" * 35 + " FINAL PERIMETER REPORT " + "=" * 35)
+    if not detected:
+        print("[-] На хосте нет открытых портов из проверяемых.")
+    for res in detected:
+        print(f"[+] PORT: {res.port:<5} | SERVICE: {res.service:<8} | INFO/BANNER: {res.banner}")
+    print("=" * 94)
 
 
 if __name__ == "__main__":
