@@ -35,7 +35,7 @@ def detect_passwords(file: Path, lines: list[str]) -> list[Finding]:
 # from pathlib import Path
 # from core.modules.dlp.password_detector import detect_passwords
 
-# file = Path('tests/fixtures/fake_passwords.py')
+# file = Path('tests/fixtures/fake_passwords.env')
 # lines = file.read_text().splitlines()
 # findings = detect_passwords(file, lines)
 
