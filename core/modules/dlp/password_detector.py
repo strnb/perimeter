@@ -3,7 +3,13 @@ from pathlib import Path
 from .results import Finding
 from .patterns import PASSWORD_PATTERNS, PASSWORD_EXCLUSIONS
 
+PASSWORD_FILE_EXTENSIONS = {".env", ".cfg", ".ini", ".conf"}
+
 def detect_passwords(file: Path, lines: list[str]) -> list[Finding]:
+    # Пропустить файл если его расширение не в списке
+    if file.suffix not in PASSWORD_FILE_EXTENSIONS:
+        return []
+
     findings = []
 
     for line_number, line in enumerate(lines, start=1):
@@ -12,10 +18,8 @@ def detect_passwords(file: Path, lines: list[str]) -> list[Finding]:
             if not match:
                 continue
 
-            # Вытащить только само значение после знака =
             value = line.split("=", 1)[1].strip().strip("\"'")
 
-            # Пропустить если значение в списке исключений
             if value in PASSWORD_EXCLUSIONS:
                 continue
 
@@ -31,15 +35,17 @@ def detect_passwords(file: Path, lines: list[str]) -> list[Finding]:
 
     return findings
 
-# python -c "
-# from pathlib import Path
-# from core.modules.dlp.password_detector import detect_passwords
+"""
+python -c "
+from pathlib import Path
+from core.modules.dlp.password_detector import detect_passwords
 
-# file = Path('tests/fixtures/fake_passwords.env')
-# lines = file.read_text().splitlines()
-# findings = detect_passwords(file, lines)
+file = Path('tests/fixtures/fake_passwords.env')
+lines = file.read_text().splitlines()
+findings = detect_passwords(file, lines)
 
-# print('Найдено:', len(findings))
-# for f in findings:
-#     print(f.severity, '—', f.value)
-# "
+print('Найдено:', len(findings))
+for f in findings:
+    print(f.severity, '—', f.value)
+"
+"""
