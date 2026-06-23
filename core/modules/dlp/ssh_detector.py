@@ -1,12 +1,6 @@
 from pathlib import Path
 from .results import Finding
-
-SSH_PATTERNS = [
-    "-----BEGIN RSA PRIVATE KEY-----",
-    "-----BEGIN OPENSSH PRIVATE KEY-----",
-    "-----BEGIN DSA PRIVATE KEY-----",
-    "-----BEGIN EC PRIVATE KEY-----",
-]
+from .patterns import SSH_PATTERNS
 
 def detect_ssh(file: Path, lines: list[str]) -> list[Finding]:
     findings = []
@@ -23,3 +17,16 @@ def detect_ssh(file: Path, lines: list[str]) -> list[Finding]:
                 ))
 
     return findings
+
+# python -c "
+# from pathlib import Path
+# from core.modules.dlp.ssh_detector import detect_ssh
+
+# file = Path('tests/fixtures/fake_id_rsa')
+# lines = file.read_text().splitlines()
+# findings = detect_ssh(file, lines)
+
+# print('Найдено:', len(findings))
+# for f in findings:
+#    print(f.to_dict())
+# "
