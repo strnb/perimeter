@@ -1,4 +1,4 @@
 from .results import ScanResult
-# Сюда позже добавим импорт основных функций сканирования, когда напишем их в port_scanner.py
+from .port_scanner import scan_ports, DEFAULT_PORTS
 
-__all__ = ["ScanResult"]
+__all__ = ["ScanResult", "scan_ports", "DEFAULT_PORTS"]
