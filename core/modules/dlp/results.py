@@ -1,5 +1,7 @@
 from dataclasses import dataclass
 
+# Допустимые значения severity: "critical", "high", "medium"
+
 @dataclass
 class Finding:
     type: str
@@ -7,8 +9,8 @@ class Finding:
     file: str
     line: int
     value: str
-
-    def to_dict(self):
+    
+    def to_dict(self) -> dict:
         return {
             "type": self.type,
             "severity": self.severity,
