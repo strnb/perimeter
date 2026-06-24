@@ -1,4 +1,7 @@
 from pathlib import Path
+from .ssh_detector import detect_ssh
+from .token_detector import detect_tokens
+from .password_detector import detect_passwords
 
 ALLOWED_EXTENSIONS = {".txt", ".py", ".env", ".json", ".yaml", ".yml", ".cfg", ".ini", ".conf"}
 
@@ -30,5 +33,17 @@ def walk_files(root: str) -> list[Path]:
 
     return result
 
-def run_scan(path: str):
-    pass
+def run_scan(root: str) -> list[dict]:
+    findings = []
+
+    for file in walk_files(root):
+        try:
+            lines = file.read_text(errors="ignore").splitlines()
+        except Exception:
+            continue
+
+        findings += detect_ssh(file, lines)
+        findings += detect_tokens(file, lines)
+        findings += detect_passwords(file, lines)
+
+    return [f.to_dict() for f in findings]
