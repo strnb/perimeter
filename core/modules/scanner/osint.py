@@ -82,12 +82,15 @@ async def get_dns(domain: str) -> Dict[str, List[str]]:
     """Асинхронная обертка для DNS-запросов."""
     return await asyncio.to_thread(_sync_dns, domain)
 
-async def _resolve_subdomain(subdomain_full: str, semaphore: asyncio.Semaphore) -> Optional[Dict[str, str]]:
+async def _resolve_subdomain(subdomain_full: str, semaphore: asyncio.Semaphore, resolver: "dns.resolver.Resolver") -> Optional[Dict[str, str]]:
     """Пытается разрешить один поддомен с ограничением конкурентности."""
     async with semaphore:
         try:
-            # Используем системный резолвер через thread pool
-            answers = await asyncio.to_thread(dns.resolver.resolve, subdomain_full, "A")
+            # ВАЖНО: используем переданный resolver с явным timeout/lifetime,
+            # а не dns.resolver.resolve() напрямую — тот использует дефолтный
+            # глобальный резолвер без гарантии тех же 2 секунд, что в _sync_dns.
+            # На длинном wordlist'е это может сильно замедлить брутфорс.
+            answers = await asyncio.to_thread(resolver.resolve, subdomain_full, "A")
             if answers:
                 return {"subdomain": subdomain_full, "ip": str(answers[0].address)}
         except Exception:
@@ -97,15 +100,24 @@ async def _resolve_subdomain(subdomain_full: str, semaphore: asyncio.Semaphore) 
 async def find_subdomains(domain: str, wordlist_path: str = "core/subdomains_wordlist.txt") -> List[Dict[str, str]]:
     """Асинхронный брутфорс поддоменов."""
     if not os.path.exists(wordlist_path):
-        logger.error(f"Wordlist not found: {wordlist_path}")
+        # ВАЖНО: путь по умолчанию относителен текущей рабочей директории (CWD),
+        # а не расположения этого файла. Если запустить программу не из корня
+        # проекта — wordlist "потеряется" молча, без видимой ошибки для юзера.
+        logger.error(f"Wordlist not found: {wordlist_path} (cwd={os.getcwd()})")
         return []
 
     with open(wordlist_path, "r", encoding="utf-8") as f:
         sub_prefixes = [line.strip() for line in f if line.strip()]
 
+    # Единый resolver с явным timeout/lifetime — той же конфигурации, что в _sync_dns,
+    # чтобы брутфорс не зависел от дефолтных (потенциально более долгих) настроек.
+    resolver = dns.resolver.Resolver()
+    resolver.timeout = 2.0
+    resolver.lifetime = 2.0
+
     semaphore = asyncio.Semaphore(50)
     tasks = [
-        _resolve_subdomain(f"{sub}.{domain}", semaphore) 
+        _resolve_subdomain(f"{sub}.{domain}", semaphore, resolver)
         for sub in sub_prefixes
     ]
 

@@ -82,6 +82,11 @@ PORT_SIGNATURES = {
            "Закрыть порт снаружи, обновить/отключить сервис."),
     1099: ("HIGH", "CVE-2011-3556", "Java RMI Registry — RCE через десериализацию",
            "Закрыть порт 1099 снаружи, обновить JRE/RMI registry."),
+    6667: ("MEDIUM", "Possible UnrealIRCd Backdoor", "Обнаружен IRC-сервис",
+           "На Metasploitable 2 это исторически UnrealIRCd 3.2.8.1 с бэкдором (CVE-2010-2075). "
+           "Баннер не всегда виден до NICK/USER — проверить версию вручную."),
+    6697: ("MEDIUM", "Possible UnrealIRCd Backdoor", "Обнаружен IRC-сервис (SSL)",
+           "См. порт 6667 — тот же сервис, проверить версию вручную."),
 }
 
 # --- Generic-правила 1:1 с контрактом knowledge_base/vulnerabilities.json (Миша) ---

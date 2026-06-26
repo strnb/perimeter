@@ -28,7 +28,10 @@ async def check_redis(host: str, port: int = 6379, timeout: float = 2.0) -> dict
         writer.write(b"PING\r\n")
         await writer.drain()
 
-        data = await reader.read(1024)
+        # ВАЖНО: read() без отдельного таймаута может ждать вечно,
+        # если порт открыт, но сервис не отвечает (та же категория бага,
+        # что была в banner.py grab_generic).
+        data = await asyncio.wait_for(reader.read(1024), timeout=timeout)
         writer.close()
         await writer.wait_closed()
 
@@ -86,7 +89,6 @@ def _sync_mysql_check(host: str, port: int) -> dict:
         conn.close()
         return {"status": "open", "weak_creds": True, "detail": "root без пароля"}
     except pymysql.err.OperationalError:
-        # Подключились к MySQL, но логин root/'' не прошёл — сервер защищён
         return {"status": "open", "weak_creds": False}
     except Exception:
         return {"status": "closed"}
