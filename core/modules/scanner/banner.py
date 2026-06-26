@@ -1,27 +1,17 @@
 import asyncio
 import re
 import ssl
+import base64
 import logging
-from typing import Optional
-
-# Настройка логгера
-logger = logging.getLogger(__name__)
 
 HTTP_SERVER_REGEX = re.compile(r"Server:\s*(.+)", re.IGNORECASE)
 
-async def _safe_grab(
-    host: str, 
-    port: int, 
-    payload: Optional[bytes] = None, 
-    timeout: float = 2.0, 
-    read_size: int = 1024,
-    use_ssl: bool = False
-) -> str:
-    """Базовая функция для безопасного получения баннера из сокета."""
-    reader, writer = None, None
+async def grab_http(host: str, port: int, timeout: float = 2.0) -> str:
+    """HTTP/HTTPS граббер с поддержкой альтернативных портов (443, 8443)."""
+    payload = "GET / HTTP/1.0\r\nHost: {}\r\n\r\n".format(host).encode('utf-8')
     try:
         ssl_context = None
-        if use_ssl:
+        if port in [443, 8443]:
             ssl_context = ssl.create_default_context()
             ssl_context.check_hostname = False
             ssl_context.verify_mode = ssl.CERT_NONE
@@ -30,54 +20,101 @@ async def _safe_grab(
             asyncio.open_connection(host, port, ssl=ssl_context),
             timeout=timeout
         )
+        writer.write(payload)
+        await writer.drain()
 
-        if payload:
-            writer.write(payload)
-            await writer.drain()
+        # ВАЖНО: read() сам по себе не имеет таймаута и может ждать вечно,
+        # если сервер ничего не присылает в ответ — оборачиваем отдельно.
+        data = await asyncio.wait_for(reader.read(1024), timeout=timeout)
+        writer.close()
+        await writer.wait_closed()
 
-        data = await reader.read(read_size)
-        return data.decode('utf-8', errors='ignore').strip()
-    except asyncio.TimeoutError:
-        logger.debug(f"Timeout grabbing banner from {host}:{port}")
-        return "timeout"
-    except Exception as e:
-        logger.debug(f"Error grabbing banner from {host}:{port}: {e}")
+        response_text = data.decode('utf-8', errors='ignore')
+        match = HTTP_SERVER_REGEX.search(response_text)
+        return match.group(1).strip() if match else "unknown"
+    except Exception:
         return "unknown"
-    finally:
-        if writer:
-            writer.close()
-            try:
-                await writer.wait_closed()
-            except Exception:
-                pass
-
-async def grab_http(host: str, port: int, timeout: float = 2.0) -> str:
-    """HTTP/HTTPS граббер."""
-    payload = f"GET / HTTP/1.0\r\nHost: {host}\r\n\r\n".encode('utf-8')
-    use_ssl = port in [443, 8443]
-    
-    response = await _safe_grab(host, port, payload=payload, timeout=timeout, use_ssl=use_ssl)
-    
-    if response in ["unknown", "timeout"]:
-        return response
-        
-    match = HTTP_SERVER_REGEX.search(response)
-    return match.group(1).strip() if match else "unknown"
 
 async def grab_ssh(host: str, port: int = 22, timeout: float = 2.0) -> str:
-    """SSH граббер."""
-    return await _safe_grab(host, port, timeout=timeout, read_size=256)
+    try:
+        reader, writer = await asyncio.wait_for(asyncio.open_connection(host, port), timeout=timeout)
+        data = await asyncio.wait_for(reader.read(256), timeout=timeout)
+        writer.close()
+        await writer.wait_closed()
+        return data.decode('utf-8', errors='ignore').strip()
+    except Exception:
+        return "unknown"
 
 async def grab_ftp(host: str, port: int = 21, timeout: float = 2.0) -> str:
-    """FTP граббер."""
-    banner = await _safe_grab(host, port, timeout=timeout, read_size=512)
-    if banner.startswith("220"):
-        return banner[3:].strip()
-    return banner
+    try:
+        reader, writer = await asyncio.wait_for(asyncio.open_connection(host, port), timeout=timeout)
+        data = await asyncio.wait_for(reader.read(512), timeout=timeout)
+        writer.close()
+        await writer.wait_closed()
+        banner = data.decode('utf-8', errors='ignore').strip()
+        return banner[3:].strip() if banner.startswith("220") else banner
+    except Exception:
+        return "unknown"
 
 async def grab_generic(host: str, port: int, timeout: float = 2.0) -> str:
-    """Generic-граббер для SMTP, Telnet и других сервисов."""
-    banner = await _safe_grab(host, port, timeout=timeout, read_size=512)
-    if banner in ["unknown", "timeout"]:
-        return banner
-    return banner if banner else "raw open"
+    """
+    Generic-граббер для портов без выделенного хендлера.
+    ВАЖНО: многие протоколы (SMB/445, X11/6000, AJP/8009, drb/8787) сами
+    НЕ присылают баннер — они ждут, что клиент заговорит первым.
+    Без отдельного таймаута на read() это виснет на месте (проверено тестом).
+    Поэтому: если за timeout секунд ничего не пришло — это тоже валидный
+    результат "порт открыт, но молчит", а не ошибка.
+    """
+    try:
+        reader, writer = await asyncio.wait_for(asyncio.open_connection(host, port), timeout=timeout)
+        try:
+            data = await asyncio.wait_for(reader.read(512), timeout=timeout)
+            banner = data.decode('utf-8', errors='ignore').strip()
+            result = banner if banner else "raw open (no banner)"
+        except asyncio.TimeoutError:
+            # Порт открыт и принял соединение, но не прислал баннер за timeout —
+            # типично для SMB/X11/AJP/RMI. Это НЕ ошибка, порт точно открыт.
+            result = "open, no banner (protocol expects client to speak first)"
+        writer.close()
+        await writer.wait_closed()
+        return result
+    except Exception:
+        return "unknown"
+
+
+async def check_tomcat_default_creds(host: str, port: int, timeout: float = 2.0) -> dict:
+    """
+    РОВНО ОДНА целевая проверка: пускает ли Tomcat Manager на дефолтных
+    учётных данных tomcat:tomcat (классика Metasploitable 2, порт 8180).
+    Не брутфорс — один HTTP-запрос с Basic Auth.
+    """
+    creds = base64.b64encode(b"tomcat:tomcat").decode("ascii")
+    payload = (
+        f"GET /manager/html HTTP/1.0\r\n"
+        f"Host: {host}\r\n"
+        f"Authorization: Basic {creds}\r\n"
+        f"\r\n"
+    ).encode("utf-8")
+
+    try:
+        reader, writer = await asyncio.wait_for(
+            asyncio.open_connection(host, port), timeout=timeout
+        )
+        writer.write(payload)
+        await writer.drain()
+
+        data = await asyncio.wait_for(reader.read(200), timeout=timeout)
+        writer.close()
+        await writer.wait_closed()
+
+        response_line = data.decode("utf-8", errors="ignore").split("\r\n", 1)[0]
+
+        if " 200 " in response_line:
+            return {"status": "open", "weak_creds": True, "detail": "tomcat:tomcat принят, /manager доступен"}
+        elif " 401 " in response_line or " 403 " in response_line:
+            return {"status": "open", "weak_creds": False}
+        else:
+            return {"status": "open", "weak_creds": False, "detail": f"неожиданный ответ: {response_line}"}
+
+    except Exception:
+        return {"status": "closed"}

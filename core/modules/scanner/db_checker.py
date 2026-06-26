@@ -1,25 +1,25 @@
 import asyncio
 import logging
-from typing import TypedDict, Optional
 
-# Настройка логгера
-logger = logging.getLogger(__name__)
+logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 
 try:
     from pymongo import MongoClient
     from pymongo.errors import ServerSelectionTimeoutError, OperationFailure
+
     PYMONGO_AVAILABLE = True
 except ImportError:
     PYMONGO_AVAILABLE = False
 
-class DBCheckResult(TypedDict):
-    status: str
-    auth: Optional[bool]
-    reason: Optional[str]
+try:
+    import pymysql
 
-async def check_redis(host: str, port: int = 6379, timeout: float = 2.0) -> DBCheckResult:
-    """Проверка доступности Redis по протоколу RESP."""
-    reader, writer = None, None
+    PYMYSQL_AVAILABLE = True
+except ImportError:
+    PYMYSQL_AVAILABLE = False
+
+
+async def check_redis(host: str, port: int = 6379, timeout: float = 2.0) -> dict:
     try:
         reader, writer = await asyncio.wait_for(
             asyncio.open_connection(host, port),
@@ -29,48 +29,73 @@ async def check_redis(host: str, port: int = 6379, timeout: float = 2.0) -> DBCh
         await writer.drain()
 
         data = await reader.read(1024)
+        writer.close()
+        await writer.wait_closed()
+
         response = data.decode('utf-8', errors='ignore').strip()
 
         if response.startswith("+PONG"):
-            return {"status": "open", "auth": False, "reason": None}
+            return {"status": "open", "auth": False}
         elif "NOAUTH" in response or "ERR AUTH" in response:
-            return {"status": "open", "auth": True, "reason": "auth_required"}
-        
-        return {"status": "closed", "auth": None, "reason": "unexpected_response"}
-    except Exception as e:
-        logger.debug(f"Redis check error for {host}:{port}: {e}")
-        return {"status": "closed", "auth": None, "reason": str(e)}
-    finally:
-        if writer:
-            writer.close()
-            try:
-                await writer.wait_closed()
-            except Exception:
-                pass
+            return {"status": "open", "auth": True}
+        else:
+            return {"status": "closed"}
+    except Exception:
+        return {"status": "closed"}
 
-def _sync_mongo_check(host: str, port: int) -> DBCheckResult:
-    """Синхронный воркер для проверки MongoDB."""
+
+def _sync_mongo_check(host: str, port: int) -> dict:
     if not PYMONGO_AVAILABLE:
-        return {"status": "error", "auth": None, "reason": "pymongo_missing"}
+        return {"status": "error", "reason": "pymongo_missing"}
 
     client = None
     try:
         client = MongoClient(host, port, serverSelectionTimeoutMS=2000)
         client.server_info()
-        return {"status": "open", "auth": False, "reason": None}
+        return {"status": "open", "auth": False}
     except OperationFailure:
-        return {"status": "open", "auth": True, "reason": "auth_required"}
+        return {"status": "open", "auth": True}
     except ServerSelectionTimeoutError:
-        return {"status": "closed", "auth": None, "reason": "timeout"}
-    except Exception as e:
-        return {"status": "closed", "auth": None, "reason": str(e)}
+        return {"status": "closed"}
+    except Exception:
+        return {"status": "closed"}
     finally:
         if client:
             client.close()
 
-async def check_mongodb(host: str, port: int = 27017) -> DBCheckResult:
-    """Асинхронная обертка для проверки MongoDB."""
+
+async def check_mongo(host: str, port: int = 27017) -> dict:
     if not PYMONGO_AVAILABLE:
-        return {"status": "error", "auth": None, "reason": "pymongo_missing"}
-    
+        return {"status": "error", "reason": "pymongo_missing"}
     return await asyncio.to_thread(_sync_mongo_check, host, port)
+
+
+def _sync_mysql_check(host: str, port: int) -> dict:
+    """
+    Синхронный воркер: РОВНО ОДНА целевая попытка логина root без пароля.
+    Это не брутфорс и не подбор словаря — единственная проверка
+    самого известного misconfiguration MySQL на Metasploitable 2.
+    """
+    conn = None
+    try:
+        conn = pymysql.connect(
+            host=host, port=port,
+            user="root", password="",
+            connect_timeout=2,
+        )
+        conn.close()
+        return {"status": "open", "weak_creds": True, "detail": "root без пароля"}
+    except pymysql.err.OperationalError:
+        # Подключились к MySQL, но логин root/'' не прошёл — сервер защищён
+        return {"status": "open", "weak_creds": False}
+    except Exception:
+        return {"status": "closed"}
+
+
+async def check_mysql_weak_creds(host: str, port: int = 3306) -> dict:
+    """Проверка classic MS2-кейса: MySQL root без пароля (одна попытка, не брутфорс)."""
+    if not PYMYSQL_AVAILABLE:
+        logging.warning("[-] Проверка MySQL пропущена: библиотека pymysql не установлена.")
+        return {"status": "error", "reason": "pymysql_missing"}
+
+    return await asyncio.to_thread(_sync_mysql_check, host, port)
