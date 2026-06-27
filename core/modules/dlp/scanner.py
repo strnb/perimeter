@@ -2,6 +2,7 @@ from pathlib import Path
 from .ssh_detector import detect_ssh
 from .token_detector import detect_tokens
 from .password_detector import detect_passwords
+from .yara_scanner import run_yara
 
 ALLOWED_EXTENSIONS = {".txt", ".py", ".env", ".json", ".yaml", ".yml", ".cfg", ".ini", ".conf"}
 
