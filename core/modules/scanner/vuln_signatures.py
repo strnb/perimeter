@@ -87,6 +87,12 @@ PORT_SIGNATURES = {
            "Баннер не всегда виден до NICK/USER — проверить версию вручную."),
     6697: ("MEDIUM", "Possible UnrealIRCd Backdoor", "Обнаружен IRC-сервис (SSL)",
            "См. порт 6667 — тот же сервис, проверить версию вручную."),
+    139: ("HIGH", "Possible CVE-2007-2447", "Обнаружен SMB/NetBIOS (Samba)",
+          "SMB не присылает версию на пассивный коннект — нужен активный Negotiate Protocol запрос. "
+          "На Metasploitable 2 это исторически Samba 3.0.20 с usermap_script RCE. Проверить вручную: "
+          "smbclient -L //<host>/ или enum4linux."),
+    445: ("HIGH", "Possible CVE-2007-2447", "Обнаружен SMB/NetBIOS (Samba)",
+          "См. порт 139 — тот же сервис."),
 }
 
 # --- Generic-правила 1:1 с контрактом knowledge_base/vulnerabilities.json (Миша) ---
