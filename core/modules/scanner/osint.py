@@ -1,36 +1,48 @@
 import asyncio
 import logging
 import os
+from datetime import datetime
+from typing import List, Dict, Any, Optional, TypedDict
+
 import whois
 import dns.resolver
-from datetime import datetime
 
-logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
+# Настройка логгера для модуля
+logger = logging.getLogger(__name__)
 
+class WhoisData(TypedDict):
+    registrar: str
+    creation_date: str
+    expiration_date: str
+    name_servers: List[str]
 
-# === Задача 14: WHOIS ===
-def _sync_whois(domain: str) -> dict:
-    """Синхронный воркер для python-whois."""
+class OSINTReport(TypedDict):
+    domain: str
+    scan_time: str
+    whois: WhoisData
+    dns: Dict[str, List[str]]
+    subdomains: List[Dict[str, str]]
+
+def _parse_whois_date(date_field: Any) -> str:
+    """Безопасно нормализует даты из WHOIS в строку."""
+    if isinstance(date_field, list):
+        date_field = date_field[0]
+    if isinstance(date_field, datetime):
+        return date_field.strftime("%Y-%m-%d %H:%M:%S")
+    return str(date_field) if date_field else "unknown"
+
+def _sync_whois(domain: str) -> WhoisData:
+    """Синхронный воркер для получения WHOIS данных."""
     try:
         w = whois.whois(domain)
-
-        # В WHOIS даты могут возвращаться как списком (если апдейтов было много), так и одной строкой/datetime.
-        # Пишем безопасный нормализатор дат в строку:
-        def parse_date(date_field):
-            if isinstance(date_field, list):
-                date_field = date_field[0]
-            if isinstance(date_field, datetime):
-                return date_field.strftime("%Y-%m-%d %H:%M:%S")
-            return str(date_field) if date_field else "unknown"
-
         return {
             "registrar": str(w.registrar) if w.registrar else "unknown",
-            "creation_date": parse_date(w.creation_date),
-            "expiration_date": parse_date(w.expiration_date),
+            "creation_date": _parse_whois_date(w.creation_date),
+            "expiration_date": _parse_whois_date(w.expiration_date),
             "name_servers": list(w.name_servers) if w.name_servers else []
         }
     except Exception as e:
-        logging.debug(f"[-] WHOIS ошибка для {domain}: {e}")
+        logger.debug(f"WHOIS error for {domain}: {e}")
         return {
             "registrar": "unknown",
             "creation_date": "unknown",
@@ -38,109 +50,93 @@ def _sync_whois(domain: str) -> dict:
             "name_servers": []
         }
 
-
-async def get_whois(domain: str) -> dict:
+async def get_whois(domain: str) -> WhoisData:
     """Асинхронная обертка для WHOIS."""
     return await asyncio.to_thread(_sync_whois, domain)
 
-
-# === Задача 15: DNS-записи ===
-def _sync_dns(domain: str) -> dict:
-    """Синхронный воркер для dnspython."""
+def _sync_dns(domain: str) -> Dict[str, List[str]]:
+    """Синхронный воркер для получения DNS-записей."""
     result = {"A": [], "MX": [], "TXT": []}
-    types = ["A", "MX", "TXT"]
-
-    # Создаем кастомный резолвер, чтобы управлять таймаутами
     resolver = dns.resolver.Resolver()
     resolver.timeout = 2.0
     resolver.lifetime = 2.0
 
-    for rtype in types:
+    for rtype in result.keys():
         try:
             answers = resolver.resolve(domain, rtype)
             for rdata in answers:
                 if rtype == "A":
                     result["A"].append(str(rdata.address))
                 elif rtype == "MX":
-                    # У MX записей есть приоритет (preference) и сам хост (exchange)
                     result["MX"].append(f"{rdata.preference} {str(rdata.exchange).rstrip('.')}")
                 elif rtype == "TXT":
-                    # TXT записи возвращаются в виде байтовых строк в списке
                     txt_strings = [b.decode('utf-8', errors='ignore') for b in rdata.strings]
                     result["TXT"].append(" ".join(txt_strings))
         except (dns.resolver.NXDOMAIN, dns.resolver.NoAnswer, dns.resolver.NoNameservers):
-            continue  # Если записи такого типа нет, просто идем дальше
-        except Exception as e:
-            logging.debug(f"[-] DNS ошибка для {domain} тип {rtype}: {e}")
             continue
-
+        except Exception as e:
+            logger.debug(f"DNS error for {domain} type {rtype}: {e}")
     return result
 
-
-async def get_dns(domain: str) -> dict:
+async def get_dns(domain: str) -> Dict[str, List[str]]:
     """Асинхронная обертка для DNS-запросов."""
     return await asyncio.to_thread(_sync_dns, domain)
 
-
-# === Задача 16: Асинхронный поиск поддоменов (Brute Force) ===
-async def _resolve_subdomain(subdomain_full: str, semaphore: asyncio.Semaphore) -> dict | None:
-    """Пытается отрезолвить один поддомен."""
+async def _resolve_subdomain(subdomain_full: str, semaphore: asyncio.Semaphore, resolver: "dns.resolver.Resolver") -> Optional[Dict[str, str]]:
+    """Пытается разрешить один поддомен с ограничением конкурентности."""
     async with semaphore:
         try:
-            # Используем asyncio.to_thread для блокирующей функции DNS
-            loop = asyncio.get_event_loop()
-            # Нативный резолвер операционной системы через сокеты (быстрее для одиночных хостов)
-            # getaddrinfo вернет IP, если домен существует
-            addr_info = await loop.run_in_executor(None, dns.resolver.resolve, subdomain_full, "A")
-            ips = [str(rdata.address) for rdata in addr_info]
-            if ips:
-                return {"subdomain": subdomain_full, "ip": ips[0]}
+            # ВАЖНО: используем переданный resolver с явным timeout/lifetime,
+            # а не dns.resolver.resolve() напрямую — тот использует дефолтный
+            # глобальный резолвер без гарантии тех же 2 секунд, что в _sync_dns.
+            # На длинном wordlist'е это может сильно замедлить брутфорс.
+            answers = await asyncio.to_thread(resolver.resolve, subdomain_full, "A")
+            if answers:
+                return {"subdomain": subdomain_full, "ip": str(answers[0].address)}
         except Exception:
             return None
-        return None
+    return None
 
-
-async def find_subdomains(domain: str, wordlist_path: str = "subdomains_wordlist.txt") -> list[dict]:
-    """Асинхронный перебор поддоменов через asyncio.gather."""
+async def find_subdomains(domain: str, wordlist_path: str = "core/subdomains_wordlist.txt") -> List[Dict[str, str]]:
+    """Асинхронный брутфорс поддоменов."""
     if not os.path.exists(wordlist_path):
-        logging.error(f"[-] Файл словаря поддоменов не найден по пути: {wordlist_path}")
+        # ВАЖНО: путь по умолчанию относителен текущей рабочей директории (CWD),
+        # а не расположения этого файла. Если запустить программу не из корня
+        # проекта — wordlist "потеряется" молча, без видимой ошибки для юзера.
+        logger.error(f"Wordlist not found: {wordlist_path} (cwd={os.getcwd()})")
         return []
 
     with open(wordlist_path, "r", encoding="utf-8") as f:
-        # Читаем строки, убираем пробелы и пустые элементы
-        subdomains = [line.strip() for line in f if line.strip()]
+        sub_prefixes = [line.strip() for line in f if line.strip()]
 
-    # Ограничиваем конкурентность, чтобы не забить DNS-сервер
-    sem = asyncio.Semaphore(50)
-    tasks = []
+    # Единый resolver с явным timeout/lifetime — той же конфигурации, что в _sync_dns,
+    # чтобы брутфорс не зависел от дефолтных (потенциально более долгих) настроек.
+    resolver = dns.resolver.Resolver()
+    resolver.timeout = 2.0
+    resolver.lifetime = 2.0
 
-    for sub in subdomains:
-        subdomain_full = f"{sub}.{domain}"
-        tasks.append(_resolve_subdomain(subdomain_full, sem))
+    semaphore = asyncio.Semaphore(50)
+    tasks = [
+        _resolve_subdomain(f"{sub}.{domain}", semaphore, resolver)
+        for sub in sub_prefixes
+    ]
 
-    logging.info(f"[*] Запущен асинхронный брут поддоменов для {domain} (задач: {len(tasks)})")
-
-    # Собираем ответы
+    logger.info(f"Starting subdomain brute for {domain} ({len(tasks)} tasks)")
     results = await asyncio.gather(*tasks)
+    return [res for res in results if res]
 
-    # Фильтруем только успешные (не None)
-    valid_subdomains = [res for res in results if res is not None]
-    return valid_subdomains
+async def run_osint(domain: str, wordlist_path: str = "core/subdomains_wordlist.txt") -> OSINTReport:
+    """Комплексный OSINT-анализ домена."""
+    logger.info(f"Starting OSINT analysis for: {domain}")
 
-
-# === Задача 17: Сборка OSINT в единый вывод (Контракт для Артёма) ===
-async def run_osint(domain: str, wordlist_path: str = "subdomains_wordlist.txt") -> dict:
-    """
-    Последовательно запускает все три этапа OSINT разведки.
-    Возвращает единый структурированный словарь-отчет.
-    """
-    logging.info(f"[*] Начало комплексного OSINT-анализа для домена: {domain}")
-
-    whois_data = await get_whois(domain)
-    dns_data = await get_dns(domain)
+    # Запускаем WHOIS и DNS параллельно, так как они независимы
+    whois_task = get_whois(domain)
+    dns_task = get_dns(domain)
+    
+    whois_data, dns_data = await asyncio.gather(whois_task, dns_task)
     subdomain_data = await find_subdomains(domain, wordlist_path)
 
-    report = {
+    report: OSINTReport = {
         "domain": domain,
         "scan_time": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
         "whois": whois_data,
@@ -148,5 +144,5 @@ async def run_osint(domain: str, wordlist_path: str = "subdomains_wordlist.txt")
         "subdomains": subdomain_data
     }
 
-    logging.info(f"[+] OSINT-анализ для {domain} успешно завершен.")
+    logger.info(f"OSINT analysis for {domain} completed.")
     return report
