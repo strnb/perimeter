@@ -3,9 +3,10 @@ import logging
 import ipaddress
 from typing import List, Optional
 
-from results import ScanResult
-from banner import grab_http, grab_ssh, grab_ftp, grab_generic, check_tomcat_default_creds
-from db_checker import check_redis, check_mongo, check_mysql_weak_creds, check_postgres_weak_creds, check_smb_ghost
+# ИСПРАВЛЕННЫЕ ИМПОРТЫ: используем полные пути от корня проекта
+from core.modules.scanner.results import ScanResult
+from core.modules.scanner.banner import grab_http, grab_ssh, grab_ftp, grab_generic, check_tomcat_default_creds
+from core.modules.scanner.db_checker import check_redis, check_mongo, check_mysql_weak_creds, check_postgres_weak_creds, check_smb_ghost
 
 logger = logging.getLogger(__name__)
 
