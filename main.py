@@ -25,18 +25,18 @@ def main(page: ft.Page):
     sidebar = ft.Container(
         content=ft.NavigationRail(    
             destinations=[
-                ft.NavigationRailDestination(icon=ft.icons.DASHBOARD, label="Главная"),
-                ft.NavigationRailDestination(icon=ft.icons.NETWORK_CHECK, label="DLP"),
-                ft.NavigationRailDestination(icon=ft.icons.NETWORK_CELL, label="NETWORK"),
-                ft.NavigationRailDestination(icon=ft.icons.SEARCH, label="OSINT"),
-                ft.NavigationRailDestination(icon=ft.icons.REPORT, label="REPORTS"),
+                ft.NavigationRailDestination(icon=ft.Icons.DASHBOARD, label="Главная"),
+                ft.NavigationRailDestination(icon=ft.Icons.NETWORK_CHECK, label="DLP"),
+                ft.NavigationRailDestination(icon=ft.Icons.NETWORK_CELL, label="NETWORK"),
+                ft.NavigationRailDestination(icon=ft.Icons.SEARCH, label="OSINT"),
+                ft.NavigationRailDestination(icon=ft.Icons.REPORT, label="REPORTS"),
 
             ],
             on_change=route_change,
-            bgcolor=ft.colors.GREY_800,
+            bgcolor=ft.Colors.GREY_800,
         ),
-        bgcolor = ft.colors.GREY_800,
-        padding= ft.padding.all(10)
+        bgcolor = ft.Colors.GREY_800,
+        padding= ft.Padding.all(10)
     )
 
     page.add(
@@ -44,7 +44,7 @@ def main(page: ft.Page):
             controls=[
                 sidebar,
                 main_content,
-                ft.VerticalDivider(width=-10, color= ft.colors.OUTLINE_VARIANT),
+                ft.VerticalDivider(width=10, color= ft.Colors.OUTLINE_VARIANT),
                 ],
             expand =True
         )
