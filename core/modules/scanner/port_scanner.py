@@ -3,94 +3,169 @@ import logging
 import ipaddress
 from typing import List, Optional
 
-# ИСПРАВЛЕННЫЕ ИМПОРТЫ: используем полные пути от корня проекта
 from core.modules.scanner.results import ScanResult
 from core.modules.scanner.banner import grab_http, grab_ssh, grab_ftp, grab_generic, check_tomcat_default_creds
-from core.modules.scanner.db_checker import check_redis, check_mongo, check_mysql_weak_creds, check_postgres_weak_creds, check_smb_ghost
+from core.modules.scanner.db_checker import (
+    check_redis, check_mongo, check_mysql_weak_creds,
+    check_postgres_weak_creds, check_smb_ghost, check_vnc,
+    check_telnet_banner, check_rpcbind, check_nfs, check_irc,
+    check_distccd, check_bind_shell,
+)
 
 logger = logging.getLogger(__name__)
 
 # Расширенный список под Metasploitable 2
 DEFAULT_PORTS = [
     21, 22, 23, 25, 53, 80, 111, 139, 443, 445, 512, 513, 514,
-    1099, 1524, 2181, 3306, 3632, 5432, 5900, 6379, 27017, 8080, 8443, 2049,
+    1099, 1524, 2181, 3306, 3632, 5432, 5900, 6200, 6379, 27017, 8080, 8443, 2049,
     2121, 6000, 6667, 6697, 8009, 8180, 8787
 ]
 
 
 async def _identify_service(host: str, port: int) -> tuple[str, Optional[str]]:
-    """Определяет сервис и запускает активные пробники безопасности на основе порта."""
+    """Определяет сервис и получает баннер на основе порта."""
     try:
         if port in [80, 443, 8080, 8443]:
+            service = "http" if port not in [443, 8443] else "https"
             banner = await grab_http(host, port)
-            return "http", banner
+            return service, banner
 
-        elif port in [21, 2121]:
-            banner = await grab_ftp(host, port)
-            return "ftp", banner
+        if port == 22:
+            return "ssh", await grab_ssh(host, port)
 
-        elif port == 22:
-            banner = await grab_ssh(host, port)
-            return "ssh", banner
+        if port == 21:
+            return "ftp", await grab_ftp(host, port)
 
-        elif port == 8180:
-            # Специфичный порт Tomcat для Metasploitable 2
-            res = await check_tomcat_default_creds(host, port)
+        if port == 23:
+            res = await check_telnet_banner(host, port)
+            banner = res.get("banner") or "Telnet open"
             if res.get("vulnerable"):
-                return "http-tomcat", "VULNERABLE: дефолтные учётные данные tomcat:tomcat"
-            return "http-tomcat", "open"
+                banner = f"VULNERABLE: Telnet service detected ({banner})"
+            return "telnet", banner
 
-        elif port == 6379:
+        if port == 111:
+            res = await check_rpcbind(host, port)
+            banner = res.get("banner") or "rpcbind open"
+            if res.get("vulnerable"):
+                banner = f"VULNERABLE: {banner}"
+            return "rpcbind", banner
+
+        if port == 2049:
+            res = await check_nfs(host, port)
+            banner = res.get("banner") or "NFS open"
+            if res.get("vulnerable"):
+                banner = f"VULNERABLE: {banner}"
+            return "nfs", banner
+
+        if port == 3632:
+            res = await check_distccd(host, port)
+            banner = res.get("detail") or res.get("banner") or "distccd open"
+            if res.get("vulnerable"):
+                banner = f"VULNERABLE: {banner} ({res.get('banner', '')})"
+            return "distccd", banner
+
+        if port in (6667, 6697):
+            res = await check_irc(host, port)
+            banner = res.get("detail") or res.get("banner") or "IRC open"
+            if res.get("vulnerable"):
+                banner = f"VULNERABLE: {banner} ({res.get('banner', '')})"
+            return "irc", banner
+
+        if port == 6379:
             res = await check_redis(host, port)
-            if res.get("vulnerable"):
-                return "redis", "VULNERABLE: доступ без аутентификации"
-            return "redis", "auth_required" if res.get("auth") else "open"
+            # ВАЖНО: проверяем status == "open", иначе нестандартный ответ
+            # на порту 6379 (не настоящий Redis) ложно помечается VULNERABLE
+            if res.get("status") == "open":
+                banner = "Auth Required" if res.get("auth") else "VULNERABLE: No Auth (+PONG)"
+            else:
+                banner = "Port open, not a real Redis response"
+            return "redis", banner
 
-        elif port == 27017:
+        if port == 27017:
             res = await check_mongo(host, port)
-            if res.get("vulnerable"):
-                return "mongodb", "VULNERABLE: доступ без аутентификации"
-            return "mongodb", "auth_required" if res.get("auth") else "open"
+            if res.get("status") == "open":
+                banner = "Auth Required" if res.get("auth") else "VULNERABLE: No Auth"
+            else:
+                banner = f"Mongo status: {res.get('status')} ({res.get('reason', '')})"
+            return "mongodb", banner
 
-        elif port == 3306:
+        if port == 3306:
             res = await check_mysql_weak_creds(host, port)
-            if res.get("vulnerable"):
-                return "mysql", f"VULNERABLE: обнаружены слабые учётные данные ({res.get('detail')})"
-            return "mysql", "open"
+            if res.get("weak_creds"):
+                banner = f"VULNERABLE: {res.get('detail', 'weak credentials')}"
+            elif res.get("status") == "error":
+                banner = f"MySQL check skipped: {res.get('reason')}"
+            else:
+                banner = "MySQL open, root password set"
+            return "mysql", banner
 
-        elif port == 5432:
-            # Наш новый активный пробник для PostgreSQL
+        if port == 8180:
+            res = await check_tomcat_default_creds(host, port)
+            if res.get("weak_creds"):
+                banner = f"VULNERABLE: {res.get('detail', 'default creds tomcat:tomcat')}"
+            else:
+                banner = "Tomcat Manager open, default creds rejected"
+            return "tomcat", banner
+
+        if port == 1524:
+            res = await check_bind_shell(host, port)
+            banner = res.get("banner") or "Metasploitable 2 root bind shell backdoor"
+            if res.get("vulnerable"):
+                banner = f"VULNERABLE: {res.get('detail')} ({banner})"
+            else:
+                banner = f"VULNERABLE: Metasploitable 2 root bind shell backdoor ({banner})"
+            return "ingreslock-backdoor", banner
+
+        if port == 6200:
+            res = await check_bind_shell(host, port)
+            banner = res.get("banner") or "vsFTPd 2.3.4 backdoor shell"
+            if res.get("vulnerable"):
+                banner = f"VULNERABLE: {res.get('detail')} ({banner})"
+            else:
+                banner = f"VULNERABLE: vsFTPd 2.3.4 backdoor shell ({banner})"
+            return "vsftpd-backdoor", banner
+
+        if port == 5900:
+            res = await check_vnc(host, port)
+            banner = res.get("banner") or "VNC open"
+            if res.get("vulnerable"):
+                banner = f"VULNERABLE: VNC service detected ({banner})"
+            return "vnc", banner
+
+        if port == 5432:
             res = await check_postgres_weak_creds(host, port)
-            if res.get("vulnerable"):
-                return "postgresql", f"VULNERABLE: обнаружены слабые учётные данные ({res.get('detail')})"
-            return "postgresql", "open"
+            if res.get("weak_creds"):
+                banner = f"VULNERABLE: {res.get('detail', 'weak credentials')}"
+            elif res.get("status") == "error":
+                banner = f"Postgres check skipped: {res.get('reason')}"
+            else:
+                banner = "PostgreSQL open, default creds rejected"
+            return "postgresql", banner
 
-        elif port == 445:
-            # Наш новый активный пробник для SMB / Samba
+        if port in (139, 445):
             res = await check_smb_ghost(host, port)
             if res.get("vulnerable"):
-                return "smb", f"VULNERABLE: {res.get('detail')} | Banner: {res.get('banner')}"
-            return "smb", "open"
+                banner = f"VULNERABLE: {res.get('detail', 'SMB negotiate confirmed')}"
+            else:
+                banner = res.get("detail") or "SMB open, negotiate not confirmed"
+            return "smb", banner
 
-        else:
-            # Для всех остальных портов собираем стандартный текстовый баннер
-            banner = await grab_generic(host, port)
-            return "unknown", banner
+        # Fallback для остальных портов
+        return "detected", await grab_generic(host, port)
 
     except Exception as e:
-        logger.debug(f"Ошибка идентификации сервиса на {host}:{port} -> {e}")
-        return "unknown", None
+        logger.error(f"Plugin error for {host}:{port} -> {e}")
+        return "error", f"Scan error: {str(e)}"
 
 
-async def scan_port(host: str, port: int, semaphore: asyncio.Semaphore, timeout: float = 2.0) -> ScanResult:
-    """Асинхронно сканирует один порт хоста с использованием семафора конкурентности."""
+async def scan_port(host: str, port: int, semaphore: asyncio.Semaphore, timeout: float = 1.0) -> ScanResult:
+    """Сканирует один порт с изоляцией ошибок."""
     async with semaphore:
         status = "closed"
         service = "unknown"
         banner = None
 
         try:
-            # Первичная проверка: открыт ли сокет в принципе
             _, writer = await asyncio.wait_for(
                 asyncio.open_connection(host, port),
                 timeout=timeout
@@ -101,7 +176,6 @@ async def scan_port(host: str, port: int, semaphore: asyncio.Semaphore, timeout:
         except (asyncio.TimeoutError, ConnectionRefusedError, OSError):
             status = "closed"
 
-        # Если порт открыт, запускаем глубокую идентификацию и активные чекеры
         if status == "open":
             service, banner = await _identify_service(host, port)
 
@@ -109,9 +183,7 @@ async def scan_port(host: str, port: int, semaphore: asyncio.Semaphore, timeout:
 
 
 async def scan_ports(target: str, ports: Optional[List[int]] = None, max_concurrency: int = 100) -> List[ScanResult]:
-    """
-    Сканирует список портов на цели (поддерживает как одиночный IP/домен, так и CIDR подсети).
-    """
+    """Сканирует список портов на цели (IP или CIDR)."""
     ports = ports or DEFAULT_PORTS
 
     try:
@@ -121,12 +193,13 @@ async def scan_ports(target: str, ports: Optional[List[int]] = None, max_concurr
         else:
             hosts = [target]
     except ValueError as e:
-        logger.error(f"Некорректный целевой адрес или диапазон сети: {target} -> {e}")
+        logger.error(f"Invalid target: {target} -> {e}")
         return []
 
     semaphore = asyncio.Semaphore(max_concurrency)
     tasks = [scan_port(host, port, semaphore) for host in hosts for port in ports]
 
-    logger.info(f"Запуск сканирования сети для {target}. Всего задач: {len(tasks)}")
+    logger.info(f"Starting scan for {len(hosts)} hosts, {len(ports)} ports each...")
     results = await asyncio.gather(*tasks)
-    return results
+
+    return [res for res in results if res.status == "open"]

@@ -59,17 +59,23 @@ BANNER_SIGNATURES = [
      "PostgreSQL — потенциально слабые учетные данные (postgres:postgres)",
      "Сменить пароль postgres, ограничить доступ по IP/файрволу."),
 
-    (re.compile(r"vnc", re.I), "HIGH", "Weak Authentication",
-     "VNC — слабая аутентификация (часто пароль 'password')",
-     "Использовать сложный пароль и/или туннелировать VNC через SSH/VPN."),
+    (re.compile(r"vnc", re.I), "MEDIUM", "Exposed VNC Service",
+     "VNC-сервис доступен по сети",
+     "Ограничить доступ по IP/VPN и использовать сложный пароль."),
 ]
 
 # --- Сигнатуры по номеру порта — для протоколов, которые не шлют банер сами ---
 # (rlogin/rsh/ingreslock/X11/drb не присылают читаемый баннер на простой connect,
 #  но сам факт открытого порта на Metasploitable УЖЕ является находкой)
 PORT_SIGNATURES = {
+    111: ("MEDIUM", "Exposed RPCBind", "rpcbind/portmapper доступен извне",
+          "Ограничить доступ к rpcbind по IP/файрволу; он раскрывает RPC/NFS-сервисы и помогает дальнейшей атаке."),
+    2049: ("HIGH", "Exposed NFS", "NFS доступен извне",
+           "Ограничить NFS по IP, проверить /etc/exports, включить root_squash и запретить публичные экспорты."),
     1524: ("CRITICAL", "Known Backdoor", "Ingreslock — готовый root bind shell",
            "Закрыть порт немедленно: подключение netcat'ом сразу даёт root-шелл."),
+    6200: ("CRITICAL", "CVE-2011-2523", "vsFTPd 2.3.4 — backdoor bind shell",
+           "Немедленно закрыть порт 6200, остановить/обновить vsftpd 2.3.4 и проверить систему на компрометацию."),
     512: ("CRITICAL", "Trust-based Auth Bypass", "'rexec' — доступ часто без пароля через .rhosts",
           "Отключить r-сервисы, использовать SSH."),
     513: ("CRITICAL", "Trust-based Auth Bypass", "'rlogin' — доступ часто без пароля через .rhosts",
@@ -123,13 +129,21 @@ def match_vulnerabilities(scan_results: list) -> list[VulnFinding]:
     и возвращает найденные уязвимости с CVE/severity/рекомендацией.
     """
     findings = []
+    seen = set()
+
+    def add_finding(finding: VulnFinding) -> None:
+        key = (finding.host, finding.port, finding.kb_id, finding.cve, finding.title)
+        if key in seen:
+            return
+        seen.add(key)
+        findings.append(finding)
 
     for r in scan_results:
         text = f"{r.service or ''} {r.banner or ''}"
 
         for pattern, severity, cve, title, rec in BANNER_SIGNATURES:
             if pattern.search(text):
-                findings.append(VulnFinding(
+                add_finding(VulnFinding(
                     host=r.host, port=r.port, service=r.service,
                     banner=r.banner or "", cve=cve, severity=severity,
                     title=title, recommendation=rec,
@@ -137,7 +151,7 @@ def match_vulnerabilities(scan_results: list) -> list[VulnFinding]:
 
         if r.port in PORT_SIGNATURES:
             severity, cve, title, rec = PORT_SIGNATURES[r.port]
-            findings.append(VulnFinding(
+            add_finding(VulnFinding(
                 host=r.host, port=r.port, service=r.service,
                 banner=r.banner or "", cve=cve, severity=severity,
                 title=title, recommendation=rec,
@@ -146,7 +160,7 @@ def match_vulnerabilities(scan_results: list) -> list[VulnFinding]:
         # Generic-правила, привязанные к VULN-003/004/005 (FTP/Telnet/SSH)
         if r.port in KB_GENERIC_PORT_RULES:
             kb_id, severity, title, rec = KB_GENERIC_PORT_RULES[r.port]
-            findings.append(VulnFinding(
+            add_finding(VulnFinding(
                 host=r.host, port=r.port, service=r.service,
                 banner=r.banner or "", cve="", severity=severity,
                 title=title, recommendation=rec, kb_id=kb_id,
@@ -155,7 +169,7 @@ def match_vulnerabilities(scan_results: list) -> list[VulnFinding]:
         # Redis/Mongo — только если реально подтверждено отсутствие авторизации
         if r.port in KB_AUTH_GATED_RULES and "VULNERABLE" in (r.banner or ""):
             kb_id, title = KB_AUTH_GATED_RULES[r.port]
-            findings.append(VulnFinding(
+            add_finding(VulnFinding(
                 host=r.host, port=r.port, service=r.service,
                 banner=r.banner or "", cve="", severity="critical",
                 title=title, recommendation="См. fix в knowledge_base/vulnerabilities.json",
