@@ -45,6 +45,16 @@ def run_scan(root: str) -> list[dict]:
 
         findings += detect_ssh(file, lines)
         findings += detect_tokens(file, lines)
-        findings += detect_passwords(file, lines)
+        # findings += detect_passwords(file, lines)
+        findings += run_yara(file)
 
-    return [f.to_dict() for f in findings]
+    # Дедупликация — убрать записи с одинаковым типом и файлом
+    seen = set()
+    unique = []
+    for f in findings:
+        key = (f.type, f.file)
+        if key not in seen:
+            seen.add(key)
+            unique.append(f)
+
+    return [f.to_dict() for f in unique]
