@@ -16,6 +16,7 @@ def detect_tokens(file: Path, lines: list[str]) -> list[Finding]:
                     file=str(file),
                     line=line_number,
                     value=match.group(0)[:40],
+                    kb_id="VULN-007",
                 ))
 
     return findings
