@@ -12,10 +12,10 @@ import asyncio
 import logging
 from typing import Dict, List, Optional, Set
 
-from osint import run_osint, OSINTReport
-from port_scanner import scan_ports
-from results import ScanResult
-from vuln_signatures import match_vulnerabilities, VulnFinding
+from .osint import run_osint, OSINTReport
+from .port_scanner import scan_ports
+from .results import ScanResult
+from .vuln_signatures import match_vulnerabilities, VulnFinding
 
 logger = logging.getLogger(__name__)
 
