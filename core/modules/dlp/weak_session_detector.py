@@ -19,6 +19,7 @@ def detect_weak_session(file: Path, lines: list[str]) -> list[Finding]:
                     severity="high",
                     file=str(file),
                     line=line_number,
+                    kb_id="VULN-033",
                     value=line.strip()[:60],
                 ))
                 break

@@ -47,7 +47,7 @@ async def run_check(client: httpx.AsyncClient, base_url: str) -> Optional[WebFin
                     "Форма загрузки принимает исполняемые PHP-файлы без проверки расширения или "
                     "MIME-типа. Риск полного захвата сервера (RCE)."
                 ),
-                kb_id="VULN-023",
+                kb_id="VULN-037",
             )
     except Exception as exc:
         logger.error("Ошибка в плагине File Upload: %s", exc)

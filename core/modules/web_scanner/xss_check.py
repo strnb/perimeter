@@ -34,7 +34,7 @@ async def run_check(client: httpx.AsyncClient, base_url: str) -> Optional[WebFin
                     "Входные данные отражаются сервером без должной фильтрации. "
                     f"Браузер может выполнить произвольный JS-код. Payload: {PAYLOAD}"
                 ),
-                kb_id="VULN-022",
+                kb_id="VULN-036",
             )
     except Exception as exc:
         logger.error("Ошибка в плагине XSS: %s", exc)

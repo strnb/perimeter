@@ -39,7 +39,7 @@ async def run_check(client: httpx.AsyncClient, base_url: str) -> Optional[WebFin
                 vuln_type="Brute Force / No Rate Limiting",
                 severity="HIGH",
                 detail="Веб-форма авторизации не блокирует сессию и не активирует CAPTCHA при атаке методом перебора.",
-                kb_id="VULN-020",
+                kb_id="VULN-034",
             )
     except Exception as exc:
         logger.error("Ошибка в плагине Brute Force: %s", exc)
