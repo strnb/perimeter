@@ -73,8 +73,6 @@ async def _identify_service(host: str, port: int) -> tuple[str, Optional[str]]:
 
         if port == 6379:
             res = await check_redis(host, port)
-            # ВАЖНО: проверяем status == "open", иначе нестандартный ответ
-            # на порту 6379 (не настоящий Redis) ложно помечается VULNERABLE
             if res.get("status") == "open":
                 banner = "Auth Required" if res.get("auth") else "VULNERABLE: No Auth (+PONG)"
             else:
@@ -149,6 +147,9 @@ async def _identify_service(host: str, port: int) -> tuple[str, Optional[str]]:
             else:
                 banner = res.get("detail") or "SMB open, negotiate not confirmed"
             return "smb", banner
+
+        if port == 2121:
+            return "ftp", await grab_ftp(host, port)
 
         # Fallback для остальных портов
         return "detected", await grab_generic(host, port)
