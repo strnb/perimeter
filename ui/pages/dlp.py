@@ -1,72 +1,124 @@
 import flet as ft
+import api
 
 def dlp_page(page: ft.Page):
     header = ft.Text("Мониторинг DLP", size=28, weight=ft.FontWeight.BOLD, color="#ffffff")
 
-    def create_channel_status(name, is_active):
-        return ft.Container(
-            content=ft.Row(
-                controls=[
-                    ft.Icon(
-                        ft.Icons.CHECK_CIRCLE if is_active else ft.Icons.CANCEL,
-                        color="#00e676" if is_active else "#ff1744",
-                        size=18
-                    ),
-                    ft.Text(name, size=13, weight=ft.FontWeight.W_500, color="#ffffff")
-                ],
-                spacing=8
-            ),
-            bgcolor="#18122b",
-            padding=12,
-            border_radius=8,
-            width=190,
-            border=ft.Border.all(1, "#393053") 
-        )
-
-    channels_row = ft.Row(
-        controls=[
-            create_channel_status("Контроль USB", True),
-            create_channel_status("Сетевой трафик", True),
-            create_channel_status("Буфер обмена", True),
-        ],
-        spacing=15
+    path_input = ft.TextField(
+        label="Путь к сканируемой директории проекта",
+        label_style=ft.TextStyle(color="#a7a2be", size=13),
+        border_color="#393053",
+        focused_border_color="#b388ff",
+        bgcolor="#130f22",
+        expand=True,
+        value="."
     )
 
+    # Расширяем таблицу новыми колонками: Строка и Содержимое
     incidents_table = ft.DataTable(
         bgcolor="#18122b",
         border_radius=10,
         heading_row_color="#130f22",
-        border=ft.Border.all(1, "#393053"), 
-        horizontal_lines=ft.BorderSide(0.5, "#251b45"), 
+        border=ft.Border.all(1, "#393053"),
         columns=[
-            ft.DataColumn(ft.Text("Время", weight=ft.FontWeight.BOLD, color="#b388ff")),
-            ft.DataColumn(ft.Text("Пользователь", weight=ft.FontWeight.BOLD, color="#b388ff")),
-            ft.DataColumn(ft.Text("Канал", weight=ft.FontWeight.BOLD, color="#b388ff")),
-            ft.DataColumn(ft.Text("Файл / Данные", weight=ft.FontWeight.BOLD, color="#b388ff")),
-            ft.DataColumn(ft.Text("Статус", weight=ft.FontWeight.BOLD, color="#b388ff")),
+            ft.DataColumn(ft.Text("Тип нарушения", weight=ft.FontWeight.BOLD, color="#b388ff")),
+            ft.DataColumn(ft.Text("Файл / Источник", weight=ft.FontWeight.BOLD, color="#b388ff")),
+            ft.DataColumn(ft.Text("№ Строки", weight=ft.FontWeight.BOLD, color="#b388ff")),
+            ft.DataColumn(ft.Text("Проблемные данные", weight=ft.FontWeight.BOLD, color="#b388ff")),
+            ft.DataColumn(ft.Text("Уровень риска", weight=ft.FontWeight.BOLD, color="#b388ff")),
         ],
-        rows=[
-            ft.DataRow(cells=[
-                ft.DataCell(ft.Text("15:42:11")), ft.DataCell(ft.Text("Иванов И.И.")),
-                ft.DataCell(ft.Text("USB-накопитель")), ft.DataCell(ft.Text("report_2026.xlsx", color="#ff5252")),
-                ft.DataCell(ft.Text("Заблокировано", color="#ff1744")),
-            ]),
-            ft.DataRow(cells=[
-                ft.DataCell(ft.Text("14:15:03")), ft.DataCell(ft.Text("Петров П.П.")),
-                ft.DataCell(ft.Text("Web (Браузер)")), ft.DataCell(ft.Text("Паспортные_данные.txt")),
-                ft.DataCell(ft.Text("Предупреждение", color="#ff9100")),
-            ]),
-        ]
+        rows=[]
     )
+
+    async def start_dlp_scan(e):
+        incidents_table.rows.clear()
+        page.update()
+
+        try:
+            raw_findings = api.scan_dlp(path_input.value)
+            
+            if not raw_findings:
+                incidents_table.rows.append(
+                    ft.DataRow(cells=[
+                        ft.DataCell(ft.Text("Угрозы не обнаружены", color="#00e676")),
+                        ft.DataCell(ft.Text("-")),
+                        ft.DataCell(ft.Text("-")),
+                        ft.DataCell(ft.Text("-")),
+                        ft.DataCell(ft.Text("-"))
+                    ])
+                )
+            elif "error" in raw_findings[0]:
+                incidents_table.rows.append(
+                    ft.DataRow(cells=[
+                        ft.DataCell(ft.Text("Ошибка модуля DLP", color="#ff1744")),
+                        ft.DataCell(ft.Text(raw_findings[0]["error"])),
+                        ft.DataCell(ft.Text("-")),
+                        ft.DataCell(ft.Text("-")),
+                        ft.DataCell(ft.Text("CRITICAL", color="#ff1744"))
+                    ])
+                )
+            else:
+                for f in raw_findings:
+                    # Вытаскиваем тип, файл и критичность
+                    vuln_type = f.get("type") or f.get("vuln_type", "Неизвестно")
+                    file_src = f.get("file", "Лог")
+                    severity = f.get("severity", "LOW").upper()
+                    
+                    # Извлекаем номер строки и само содержимое (проблемный кусок кода)
+                    line_num = str(f.get("line", "?"))
+                    # Бывает raw_line, code, match или value. На всякий случай проверяем популярные ключи:
+                    problem_data = f.get("raw_line") or f.get("match") or f.get("value") or "Секретные данные"
+
+                    color = "#ff1744" if severity in ("CRITICAL", "HIGH") else "#ff9100"
+
+                    incidents_table.rows.append(
+                        ft.DataRow(cells=[
+                            ft.DataCell(ft.Text(vuln_type, color="#ffffff")),
+                            ft.DataCell(ft.Text(file_src, color="#a7a2be")),
+                            ft.DataCell(ft.Text(line_num, color="#ffffff")),
+                            # Оборачиваем в Container, чтобы длинный секрет/пароль аккуратно смотрелся
+                            ft.DataCell(ft.Container(
+                                content=ft.Text(problem_data, color="#ffeb3b", font_family="Courier New", size=12),
+                                width=250,
+                                alignment=ft.alignment.center_left
+                            )),
+                            ft.DataCell(ft.Text(severity, color=color)),
+                        ])
+                    )
+        except Exception as ex:
+            incidents_table.rows.append(
+                ft.DataRow(cells=[
+                    ft.DataCell(ft.Text("Критический сбой", color="#ff1744")),
+                    ft.DataCell(ft.Text(str(ex))),
+                    ft.DataCell(ft.Text("-")),
+                    ft.DataCell(ft.Text("-")),
+                    ft.DataCell(ft.Text("FAIL"))
+                ])
+            )
+        
+        page.update()
+
+    scan_btn = ft.ElevatedButton(
+        "Анализ директории",
+        icon=ft.Icons.FIND_IN_PAGE,
+        bgcolor="#b388ff",
+        color="#0b0813",
+        on_click=start_dlp_scan
+    )
+
+    search_row = ft.Row(controls=[path_input, scan_btn], spacing=12)
 
     return ft.Column(
         controls=[
             header,
-            ft.Text("Активные модули защиты:", size=14, color="#a7a2be"),
-            channels_row,
+            ft.Text("Настройка области сканирования DLP-модуля:", size=14, color="#a7a2be"),
+            search_row,
             ft.Divider(color="#251b45"),
-            ft.Text("Журнал нарушений политик безопасности:", size=16, weight=ft.FontWeight.W_500, color="#ffffff"),
-            ft.ListView(controls=[incidents_table], expand=True)
+            ft.Text("Обнаруженные инциденты и утечки данных:", size=16, weight=ft.FontWeight.W_500, color="#ffffff"),
+            # Оборачиваем в Row с возможностью скролла, если таблица не влезет по ширине
+            ft.Row([
+                ft.ListView(controls=[incidents_table], expand=True)
+            ], expand=True, scroll=ft.ScrollMode.ADAPTIVE)
         ],
         expand=True,
         spacing=20

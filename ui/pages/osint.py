@@ -1,38 +1,58 @@
 import flet as ft
+import api
 
 def osint_page(page: ft.Page):
     header = ft.Text("Внешняя разведка (OSINT)", size=28, weight=ft.FontWeight.BOLD, color="#ffffff")
 
     search_input = ft.TextField(
-        label="Объект исследования (Email, Домен, IP)",
+        label="Объект исследования (Домен)",
         label_style=ft.TextStyle(color="#a7a2be", size=13),
         border_color="#393053",
-        focused_border_color="#b388ff", 
+        focused_border_color="#b388ff",
         bgcolor="#130f22",
-        cursor_color="#b388ff",
         expand=True
     )
 
+    console_output = ft.Column(spacing=5)
+
+    async def start_osint_click(e):
+        if not search_input.value:
+            return
+        
+        console_output.controls.clear()
+        console_output.controls.append(ft.Text(f"[*] Запуск OSINT-пайплайна для {search_input.value}...", font_family="Courier New", color="#b388ff"))
+        page.update() # ИСПРАВЛЕНО
+
+        try:
+            report = await api.run_osint_report(search_input.value)
+            
+            if "error" in report:
+                console_output.controls.append(ft.Text(f"[-] Ошибка подсистемы: {report['error']}", font_family="Courier New", color="#ff1744"))
+            else:
+                console_output.controls.append(ft.Text("[+] Разведка завершена:", font_family="Courier New", color="#00e676"))
+                for key, val in report.items():
+                    console_output.controls.append(ft.Text(f" -> {key}: {str(val)[:100]}...", font_family="Courier New", color="#ffffff"))
+        except Exception as ex:
+            console_output.controls.append(ft.Text(f"[-] Ошибка выполнения: {ex}", font_family="Courier New", color="#ff1744"))
+        
+        page.update() # ИСПРАВЛЕНО
+
     start_btn = ft.ElevatedButton(
-        "Запустить анализ", 
+        "Запустить анализ",
         icon=ft.Icons.SEARCH,
-        bgcolor="#b388ff",  
+        bgcolor="#b388ff",
         color="#0b0813",
-        style=ft.ButtonStyle(shape=ft.RoundedRectangleBorder(radius=8))
+        on_click=start_osint_click
     )
 
     search_row = ft.Row(controls=[search_input, start_btn], spacing=12)
 
     results_box = ft.Container(
-        content=ft.Column(
-            controls=[
-                ft.Text("Консоль вывода подсистемы разведки", size=14, color="#a7a2be"),
-                ft.Divider(color="#251b45"),
-                ft.Text("[*] Подключение к Shodan API и VirusTotal...", font_family="Courier New", color="#a7a2be"),
-                ft.Text("[+] Утечек по базе компрометации сотрудников не найдено.", font_family="Courier New", color="#00e676"),
-            ],
-            spacing=8
-        ),
+        content=ft.Column([
+            ft.Text("Консоль вывода подсистемы разведки", size=14, color="#a7a2be"),
+            ft.Divider(color="#251b45"),
+            ft.ListView(controls=[console_output], expand=True)
+        ], spacing=8),
         bgcolor="#18122b",
         padding=20,
         border_radius=12,

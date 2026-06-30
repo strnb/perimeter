@@ -1,54 +1,67 @@
 import flet as ft
+import api
 
 def network_page(page: ft.Page):
     header = ft.Text("Сетевой анализатор «Периметр»", size=28, weight=ft.FontWeight.BOLD, color="#ffffff")
 
-    def create_stat_card(title, value, icon_name, neon_color):
-        return ft.Container(
-            content=ft.Row(
-                controls=[
-                    ft.Icon(icon_name, color=neon_color, size=26),
-                    ft.Column(
-                        controls=[
-                            ft.Text(title, size=11, color="#a7a2be"),
-                            ft.Text(value, size=16, weight=ft.FontWeight.BOLD, color="#ffffff")
-                        ],
-                        spacing=1,
-                        alignment=ft.MainAxisAlignment.CENTER
-                    )
-                ],
-                spacing=12
-            ),
-            bgcolor="#18122b",
-            padding=15,
-            border_radius=10,
-            width=230,
-            height=75,
-            border=ft.Border.all(1, "#393053")
-        )
-
-    network_stats = ft.Row(
-        controls=[
-            create_stat_card("Шлюз WireGuard", "Активен", ft.Icons.SHIELD, "#00e676"),
-            create_stat_card("Интерфейс туннеля", "perimeter-tun", ft.Icons.ROUTER, "#b388ff"), 
-            create_stat_card("Задержка сети", "42 мс", ft.Icons.SPEED, "#ffea00"),
-        ],
-        spacing=15
+    target_input = ft.TextField(
+        label="IP-адрес, домен или подсеть CIDR",
+        label_style=ft.TextStyle(color="#a7a2be", size=13),
+        border_color="#393053",
+        focused_border_color="#b388ff",
+        bgcolor="#130f22",
+        expand=True
     )
 
+    results_list = ft.ListView(expand=True, spacing=10)
+
+    async def start_scan_click(e):
+        if not target_input.value:
+            return
+        
+        results_list.controls.clear()
+        results_list.controls.append(ft.Text("[*] Сканирование портов запущено...", color="#b388ff"))
+        page.update() # ИСПРАВЛЕНО
+
+        try:
+            findings = await api.scan_network(target_input.value)
+            results_list.controls.clear()
+
+            if not findings or "error" in findings[0]:
+                results_list.controls.append(ft.Text("[-] Ошибка сканирования или модуль недоступен", color="#ff1744"))
+            else:
+                for f in findings:
+                    status_line = ft.Row([
+                        ft.Icon(ft.Icons.RADIO_BUTTON_ON, color="#00e676", size=14),
+                        ft.Text(f"Порт {f['port']} ({f['service']})", weight=ft.FontWeight.BOLD, color="#ffffff"),
+                        ft.Text(f"Баннер: {f['banner']}" if f['banner'] else "", color="#a7a2be")
+                    ])
+                    results_list.controls.append(status_line)
+                    
+                    for vuln in f.get("findings", []):
+                        vuln_line = ft.Text(f"    ↳ [!] {vuln.get('title', 'Уязвимость')} - {vuln.get('severity', 'UNKNOWN')}", color="#ff9100")
+                        results_list.controls.append(vuln_line)
+        except Exception as ex:
+            results_list.controls.append(ft.Text(f"[-] Критическая ошибка: {ex}", color="#ff1744"))
+        
+        page.update() # ИСПРАВЛЕНО
+
+    scan_btn = ft.ElevatedButton(
+        "Сканировать",
+        icon=ft.Icons.PLAY_ARROW,
+        bgcolor="#b388ff",
+        color="#0b0813",
+        on_click=start_scan_click # Передаем асинхронную функцию напрямую
+    )
+
+    control_row = ft.Row([target_input, scan_btn], spacing=12)
+
     traffic_panel = ft.Container(
-        content=ft.Column(
-            controls=[
-                ft.Row([
-                    ft.Text("Конфикагурация интерфейсов ядра", size=16, weight=ft.FontWeight.W_500, color="#ffffff"),
-                    ft.IconButton(ft.Icons.REFRESH, icon_size=18, icon_color="#b388ff")
-                ], alignment=ft.MainAxisAlignment.SPACE_BETWEEN),
-                ft.Divider(color="#251b45"),
-                ft.Row([ft.Text("eth0", weight=ft.FontWeight.BOLD, color="#ffffff"), ft.Text("192.168.1.45", color="#a7a2be"), ft.Text("UP", color="#00e676")]),
-                ft.Row([ft.Text("perimeter-tun", weight=ft.FontWeight.BOLD, color="#b388ff"), ft.Text("10.0.0.2", color="#a7a2be"), ft.Text("RUNNING", color="#00e676")]),
-            ],
-            spacing=12
-        ),
+        content=ft.Column([
+            ft.Text("Результаты сканирования сети в реальном времени:", size=16, weight=ft.FontWeight.W_500, color="#ffffff"),
+            ft.Divider(color="#251b45"),
+            results_list
+        ], expand=True),
         bgcolor="#18122b",
         padding=20,
         border_radius=12,
@@ -57,7 +70,7 @@ def network_page(page: ft.Page):
     )
 
     return ft.Column(
-        controls=[header, network_stats, ft.Divider(color="#251b45"), traffic_panel],
+        controls=[header, control_row, ft.Divider(color="#251b45"), traffic_panel],
         expand=True,
         spacing=20
     )
