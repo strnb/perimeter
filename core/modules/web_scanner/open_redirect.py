@@ -38,7 +38,7 @@ async def run_check(client: httpx.AsyncClient, base_url: str) -> Optional[WebFin
                     "Приложение принимает внешние адреса в параметрах и перенаправляет пользователя "
                     f"на сторонний ресурс ({EXTERNAL_DOMAIN}) без валидации."
                 ),
-                kb_id="VULN-024",
+                kb_id="VULN-038",
             )
     except Exception as exc:
         logger.error("Ошибка в плагине Open Redirect: %s", exc)

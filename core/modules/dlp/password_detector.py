@@ -30,8 +30,9 @@ def detect_passwords(file: Path, lines: list[str]) -> list[Finding]:
                 severity=severity,
                 file=str(file),
                 line=line_number,
-                value=value[:40],
-            ))
+                    kb_id="VULN-006",
+                    value=value[:40],
+                ))
 
     return findings
 

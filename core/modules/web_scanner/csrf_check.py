@@ -36,7 +36,7 @@ async def run_check(client: httpx.AsyncClient, base_url: str) -> Optional[WebFin
                     "Форма изменения критических параметров пользователя не содержит Anti-CSRF токенов. "
                     "Возможна подделка запроса."
                 ),
-                kb_id="VULN-021",
+                kb_id="VULN-035",
             )
     except Exception as exc:
         logger.error("Ошибка в плагине CSRF: %s", exc)

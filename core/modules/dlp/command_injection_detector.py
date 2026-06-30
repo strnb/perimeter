@@ -19,6 +19,7 @@ def detect_command_injection(file: Path, lines: list[str]) -> list[Finding]:
                     severity="critical",
                     file=str(file),
                     line=line_number,
+                    kb_id="VULN-032",
                     value=line.strip()[:60],
                 ))
 

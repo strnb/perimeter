@@ -24,6 +24,7 @@ def detect_sql_injection(file: Path, lines: list[str]) -> list[Finding]:
                     severity="critical",
                     file=str(file),
                     line=line_number,
+                    kb_id="VULN-031",
                     value=line.strip()[:60],
                 ))
                 break  # не дублировать находку если совпали несколько паттернов на одной строке

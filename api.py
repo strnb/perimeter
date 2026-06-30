@@ -6,10 +6,11 @@ api.py — единая точка входа для UI (Артём).
   - Crypto Vault (Дамир): vault_unlock, vault_save, vault_load, vault_list
   - Port Scanner (Демьян): scan_network
   - OSINT (Демьян): run_osint_report
+  - Web Scanner (L7): scan_web
+  - Combined Pipeline: run_combined_pipeline
   - Knowledge Base (Миша): enrich_finding
 
-Все async-функции (scan_network, run_osint_report) нужно вызывать через asyncio.run()
-или await внутри async-контекста Flet.
+Все async-функции нужно вызывать через asyncio.run() или await внутри async-контекста Flet.
 """
 
 import asyncio
@@ -17,12 +18,12 @@ import json
 import logging
 from datetime import datetime
 from pathlib import Path
-from typing import Optional
+from typing import Optional, List, Dict
 
 logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
-# Импорты модулей с мягкой деградацией: если ветка не смержена — не падаем
+# Импорты модулей с мягкой деградацией
 # ---------------------------------------------------------------------------
 
 try:
@@ -30,7 +31,7 @@ try:
     _DLP_AVAILABLE = True
 except ImportError:
     _DLP_AVAILABLE = False
-    logger.warning("DLP module not available (merge Дамир's branch first)")
+    logger.warning("DLP module not available")
 
 try:
     from core.modules.vault import (
@@ -44,7 +45,7 @@ try:
     _VAULT_AVAILABLE = True
 except ImportError:
     _VAULT_AVAILABLE = False
-    logger.warning("Vault module not available (merge Дамир's branch first)")
+    logger.warning("Vault module not available")
 
 try:
     from core.modules.scanner.port_scanner import scan_ports, DEFAULT_PORTS
@@ -60,6 +61,21 @@ try:
 except ImportError:
     _OSINT_AVAILABLE = False
     logger.warning("OSINT module not available")
+
+try:
+    from core.modules.web_scanner.web_pipeline import run_web_assessment
+    _WEB_SCANNER_AVAILABLE = True
+except ImportError:
+    _WEB_SCANNER_AVAILABLE = False
+    logger.warning("Web Scanner module not available")
+
+try:
+    from core.modules.scanner.pipeline import osint_and_scan
+    _PIPELINE_AVAILABLE = True
+except ImportError:
+    _PIPELINE_AVAILABLE = False
+    logger.warning("Combined Pipeline module not available")
+
 
 # ---------------------------------------------------------------------------
 # База знаний (knowledge_base/vulnerabilities.json)
@@ -85,11 +101,10 @@ def _load_knowledge_base() -> list[dict]:
 def enrich_finding(finding: dict) -> dict:
     """
     Обогащает finding описанием и рекомендацией из базы знаний.
-    Ищет по полю 'type' или 'kb_id' совпадение с полем 'id' в базе.
-    Возвращает finding с добавленными полями description и fix.
+    Ищет по полю 'type'/'vuln_type' или 'kb_id' совпадение с полем 'id' в базе.
     """
     kb = _load_knowledge_base()
-    finding_type = finding.get("type", "")
+    finding_type = finding.get("type") or finding.get("vuln_type", "")
     kb_id = finding.get("kb_id", "")
 
     TYPE_TO_KB = {
@@ -123,18 +138,12 @@ def enrich_finding(finding: dict) -> dict:
 # DLP
 # ---------------------------------------------------------------------------
 
-# Последний скан — кешируем для get_security_index()
 _last_scan_findings: list[dict] = []
 
-
 def scan_dlp(path: str) -> list[dict]:
-    """
-    Запускает DLP-сканирование папки path.
-    Возвращает список словарей Finding с полями:
-      type, severity, file, line, value, title, description, fix, risk
-    """
+    """Запускает DLP-сканирование папки path."""
     if not _DLP_AVAILABLE:
-        return [{"error": "DLP module not available. Merge Дамир's branch."}]
+        return [{"error": "DLP module not available"}]
 
     global _last_scan_findings
     raw = _dlp_run_scan(path)
@@ -144,15 +153,10 @@ def scan_dlp(path: str) -> list[dict]:
 
 
 def get_security_index() -> int:
-    """
-    Индекс безопасности от 0 до 100 на основе последнего DLP-скана.
-    Начинается с 100, вычитается:
-      -10 за каждый critical finding
-      -5  за каждый high finding
-    """
+    """Индекс безопасности от 0 до 100 на основе последнего DLP-скана."""
     score = 100
     for f in _last_scan_findings:
-        sev = f.get("severity", "")
+        sev = f.get("severity", "").lower()
         if sev == "critical":
             score -= 10
         elif sev == "high":
@@ -165,12 +169,7 @@ def get_security_index() -> int:
 # ---------------------------------------------------------------------------
 
 def vault_unlock(password: str) -> bool:
-    """
-    Разблокирует Vault. При первом запуске — инициализирует мастер-пароль.
-    Возвращает True при успехе.
-    """
     if not _VAULT_AVAILABLE:
-        logger.error("Vault module not available")
         return False
     try:
         return _vault_unlock(password)
@@ -178,56 +177,39 @@ def vault_unlock(password: str) -> bool:
         logger.error(f"vault_unlock error: {e}")
         return False
 
-
 def vault_lock():
-    """Блокирует Vault (стирает ключ из памяти)."""
     if _VAULT_AVAILABLE:
         _vault_lock()
 
-
 def vault_save(name: str, value: str) -> bool:
-    """
-    Сохраняет секрет в Vault. Vault должен быть разблокирован.
-    Возвращает True при успехе.
-    """
     if not _VAULT_AVAILABLE:
-        logger.error("Vault module not available")
         return False
     try:
         _vault_save(name, value)
         return True
-    except RuntimeError as e:
-        logger.error(f"vault_save: {e}")
+    except Exception as e:
+        logger.error(f"vault_save error: {e}")
         return False
 
-
 def vault_load(name: str) -> Optional[str]:
-    """
-    Загружает секрет из Vault. Vault должен быть разблокирован.
-    Возвращает строку или None при ошибке.
-    """
     if not _VAULT_AVAILABLE:
         return None
     try:
         return _vault_load(name)
     except Exception as e:
-        logger.error(f"vault_load: {e}")
+        logger.error(f"vault_load error: {e}")
         return None
 
-
 def vault_list() -> list[str]:
-    """Возвращает список имён секретов без расшифровки значений."""
     if not _VAULT_AVAILABLE:
         return []
     try:
         return _vault_list()
     except Exception as e:
-        logger.error(f"vault_list: {e}")
+        logger.error(f"vault_list error: {e}")
         return []
 
-
 def vault_is_initialized() -> bool:
-    """Проверяет, установлен ли мастер-пароль."""
     if not _VAULT_AVAILABLE:
         return False
     return _vault_initialized()
@@ -241,33 +223,26 @@ async def scan_network(
     target: str,
     ports: Optional[list[int]] = None,
 ) -> list[dict]:
-    """
-    Асинхронное сканирование портов цели (IP, домен или CIDR).
-    Возвращает список словарей:
-      {host, port, status, service, banner, findings: [...]}
-
-    findings — уязвимости из vuln_signatures (если _SCANNER_AVAILABLE).
-
-    Пример вызова из UI:
-        results = asyncio.run(scan_network("192.168.1.1"))
-    """
+    """Асинхронное сканирование портов цели с обогащением из базы знаний."""
     if not _SCANNER_AVAILABLE:
         return [{"error": "Scanner module not available"}]
 
     scan_results = await scan_ports(target, ports=ports)
     vuln_findings = match_vulnerabilities(scan_results)
 
-    # Группируем находки по хосту:порту для удобства UI
     findings_map: dict[tuple, list] = {}
     for vf in vuln_findings:
         key = (vf.host, vf.port)
-        findings_map.setdefault(key, []).append({
+        finding_dict = {
             "cve": vf.cve,
             "severity": vf.severity,
             "title": vf.title,
             "recommendation": vf.recommendation,
             "kb_id": vf.kb_id,
-        })
+        }
+        # Обогащаем находку из базы знаний
+        enriched = enrich_finding(finding_dict)
+        findings_map.setdefault(key, []).append(enriched)
 
     output = []
     for r in scan_results:
@@ -293,17 +268,8 @@ async def run_osint_report(
     domain: str,
     wordlist_path: str = "core/subdomains_wordlist.txt",
 ) -> dict:
-    """
-    Полный OSINT-анализ домена: WHOIS + DNS + поддомены.
-    Возвращает словарь:
-      {domain, scan_time, whois: {...}, dns: {...}, subdomains: [...]}
-
-    Пример вызова из UI:
-        report = asyncio.run(run_osint_report("example.com"))
-    """
     if not _OSINT_AVAILABLE:
         return {"error": "OSINT module not available"}
-
     try:
         return await run_osint(domain, wordlist_path=wordlist_path)
     except Exception as e:
@@ -312,19 +278,86 @@ async def run_osint_report(
 
 
 # ---------------------------------------------------------------------------
+# Web Scanner (L7)
+# ---------------------------------------------------------------------------
+
+async def scan_web(
+    target_ip: str,
+    port: int = 4280,
+    cookies: Optional[dict] = None,
+) -> list[dict]:
+    """
+    Асинхронный аудит веб-уязвимостей (L7) с обогащением из базы знаний.
+    """
+    if not _WEB_SCANNER_AVAILABLE:
+        return [{"error": "Web Scanner module not available"}]
+    try:
+        raw_findings = await run_web_assessment(target_ip, port=port, cookies=cookies)
+        return [enrich_finding(f) for f in raw_findings if f]
+    except Exception as e:
+        logger.error(f"scan_web error: {e}")
+        return [{"error": str(e)}]
+
+
+# ---------------------------------------------------------------------------
+# Combined Pipeline (OSINT + Network Scan)
+# ---------------------------------------------------------------------------
+
+async def run_combined_pipeline(
+    domain: str,
+    wordlist_path: str = "core/subdomains_wordlist.txt",
+    ports: Optional[list[int]] = None,
+    host_concurrency: int = 10,
+    enrich: bool = True,
+) -> dict:
+    """
+    Запускает сквозной сценарий: OSINT -> Скан портов -> Обогащение.
+    """
+    if not _PIPELINE_AVAILABLE:
+        return {"error": "Combined Pipeline module not available"}
+    try:
+        result = await osint_and_scan(
+            domain=domain,
+            wordlist_path=wordlist_path,
+            ports=ports,
+            host_concurrency=host_concurrency,
+            enrich=enrich
+        )
+        # Если требуется обогащение, прогоняем находки через базу знаний
+        if enrich and "findings" in result:
+            enriched_findings = []
+            for vf in result["findings"]:
+                finding_dict = {
+                    "host": vf.host,
+                    "port": vf.port,
+                    "service": vf.service,
+                    "banner": vf.banner,
+                    "cve": vf.cve,
+                    "severity": vf.severity,
+                    "title": vf.title,
+                    "recommendation": vf.recommendation,
+                    "kb_id": vf.kb_id,
+                }
+                enriched_findings.append(enrich_finding(finding_dict))
+            result["findings"] = enriched_findings
+        return result
+    except Exception as e:
+        logger.error(f"run_combined_pipeline error: {e}")
+        return {"error": str(e)}
+
+
+# ---------------------------------------------------------------------------
 # Reports
 # ---------------------------------------------------------------------------
 
 def generate_json_report(findings: list[dict]) -> str:
-    """Сериализует результаты DLP-скана в JSON с отступами."""
     return json.dumps(findings, ensure_ascii=False, indent=2)
 
 
 def generate_text_report(findings: list[dict]) -> str:
-    """Читаемый текстовый отчёт с разбивкой по severity."""
     sections: dict[str, list[dict]] = {"critical": [], "high": [], "medium": [], "other": []}
     for f in findings:
-        sev = f.get("severity", "other")
+        sev = f.get("severity", "other").lower()
         sections.get(sev, sections["other"]).append(f)
 
     lines = [f"=== PERIMETER Security Report ({datetime.now().strftime('%Y-%m-%d %H:%M')}) ===\n"]
@@ -335,7 +368,7 @@ def generate_text_report(findings: list[dict]) -> str:
         lines.append(f"\n[{sev.upper()}] — {len(items)} finding(s)")
         lines.append("-" * 50)
         for f in items:
-            lines.append(f"  Type   : {f.get('type', '?')}")
+            lines.append(f"  Type   : {f.get('type') or f.get('vuln_type', '?')}")
             lines.append(f"  File   : {f.get('file', '?')}  (line {f.get('line', '?')})")
             if f.get("title"):
                 lines.append(f"  Title  : {f['title']}")
@@ -349,10 +382,6 @@ def generate_text_report(findings: list[dict]) -> str:
 
 
 def save_report(findings: list[dict], reports_dir: str = "reports") -> tuple[str, str]:
-    """
-    Сохраняет JSON и текстовый отчёт в папку reports/.
-    Возвращает (путь_к_json, путь_к_txt).
-    """
     Path(reports_dir).mkdir(exist_ok=True)
     ts = datetime.now().strftime("%Y-%m-%d_%H-%M")
     json_path = Path(reports_dir) / f"scan_{ts}.json"
