@@ -1,3 +1,4 @@
 yara-python
 cryptography
 httpx
+flet
