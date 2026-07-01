@@ -1,21 +1,31 @@
 import flet as ft
 import api  
+import sqlite3
+from database import DB_PATH
 
 def dashboard_page(page: ft.Page):
-    # Получаем реальный индекс безопасности (по умолчанию 100)
-    current_index = api.get_security_index()
-
-    # Считаем количество угроз из последнего DLP-сканирования, если они есть
+    # Получаем данные последнего DLP-сканирования из БД
     critical_count = 0
     medium_count = 0
     low_count = 0
+    current_index = 100
 
-    # Предполагаем, что у Дамира в api.py может быть метод получения последних находок, 
-    # либо мы можем безопасно вытащить их, если api хранит историю.
-    # Если интеграции поштучно нет, пока оставляем динамический расчет или 0, но без багов.
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        cursor = conn.cursor()
+        cursor.execute("SELECT critical_count, medium_count, low_count FROM dlp_results ORDER BY id DESC LIMIT 1")
+        row = cursor.fetchone()
+        conn.close()
+        
+        if row:
+            critical_count, medium_count, low_count = row
+            # Рассчитываем индекс безопасности на основе находок
+            score = 100 - (critical_count * 10) - (medium_count * 5) - (low_count * 2)
+            current_index = max(0, score)
+    except Exception as ex:
+        print(f"[DASHBOARD] Ошибка получения данных из БД: {ex}")
     
-    security_card = ft.Container(
-        content=ft.Column(
+    security_card = ft.Container(        content=ft.Column(
             controls=[
                 ft.Text("Индекс Безопасности", size=14, color="#a7a2be", weight=ft.FontWeight.W_500),
                 ft.Text(str(current_index), size=54, weight=ft.FontWeight.BOLD, color="#00e676" if current_index > 70 else "#ff9100") 

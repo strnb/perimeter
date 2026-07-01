@@ -2,8 +2,7 @@ import logging
 import flet as ft
 import api
 import asyncio
-from database import DB_PATH
-
+import database
 
 logger = logging.getLogger(__name__)
 
@@ -102,6 +101,28 @@ def dlp_page(page: ft.Page):
             print(f"[DEBUG] Найдено результатов: {len(raw_findings)}")
             logger.info(f"Сканирование завершено. Найдено находок: {len(raw_findings)}")
 
+            if raw_findings and "error" not in raw_findings[0]:
+                # Считаем уязвимости по уровням риска
+                critical_count = 0
+                medium_count = 0
+                low_count = 0
+                for f in raw_findings:
+                    severity = f.get("severity", "LOW").upper()
+                    if severity in ("CRITICAL", "HIGH"):
+                        critical_count += 1
+                    elif severity == "MEDIUM":
+                        medium_count += 1
+                    else:
+                        low_count += 1
+                
+                # Сохраняем в БД
+                from datetime import datetime
+                scan_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                try:
+                    database.save_dlp_result(scan_time, path_input.value, critical_count, medium_count, low_count)
+                    logger.info("Результаты DLP успешно сохранены в БД.")
+                except Exception as db_ex:
+                    logger.error(f"Ошибка сохранения результатов DLP в БД: {db_ex}")
             if not raw_findings:
                 table_rows_column.controls.append(
                     table_row(["Угрозы не обнаружены", "-", "-", "-", "-"],

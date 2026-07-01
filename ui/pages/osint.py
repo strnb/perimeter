@@ -1,7 +1,6 @@
 import flet as ft
 import api
-from database import DB_PATH
-
+import database
 def osint_page(page: ft.Page):
     header = ft.Text("Внешняя разведка (OSINT)", size=28, weight=ft.FontWeight.BOLD, color="#ffffff")
 
@@ -33,6 +32,20 @@ def osint_page(page: ft.Page):
             elif "error" in result:
                 console_output.controls.append(ft.Text(f"[-] Ошибка пайплайна: {result['error']}", font_family="Courier New", color="#ff1744"))
             else:
+                # Сохраняем результаты в БД
+                from datetime import datetime
+                scan_time = result.get('scan_time') or datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                target_domain = result.get('domain', domain_input.value)
+                whois_data = result.get('whois', {})
+                registrar = whois_data.get('registrar') or whois_data.get('registrar_name') or whois_data.get('Регистратор') or 'Неизвестно'
+                subdomains_count = len(result.get('subdomains', []))
+                
+                try:
+                    database.save_osint_result(scan_time, target_domain, registrar, subdomains_count)
+                    console_output.controls.append(ft.Text("[+] Результаты успешно сохранены в базу данных.", font_family="Courier New", color="#00e676"))
+                except Exception as db_ex:
+                    console_output.controls.append(ft.Text(f"[-] Ошибка сохранения в БД: {db_ex}", font_family="Courier New", color="#ff1744"))
+
                 console_output.controls.append(ft.Text(f" -> Домен: {result.get('domain', domain_input.value)}", font_family="Courier New", color="#ffffff"))
                 console_output.controls.append(ft.Text(f" -> Время сканирования: {result.get('scan_time', '-')}", font_family="Courier New", color="#ffffff"))
                 

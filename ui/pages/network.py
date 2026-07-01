@@ -1,7 +1,6 @@
 import flet as ft
 import api
-from database import DB_PATH
-
+import database
 def network_page(page: ft.Page):
     header = ft.Text("Сетевой анализатор «Периметр»", size=28, weight=ft.FontWeight.BOLD, color="#ffffff")
 
@@ -31,6 +30,41 @@ def network_page(page: ft.Page):
             if not findings or "error" in findings[0]:
                 results_list.controls.append(ft.Text("[-] Ошибка сканирования или модуль недоступен", color="#ff1744"))
             else:
+                # Сохраняем результаты в БД
+                open_ports_count = len(findings)
+                vulnerabilities_count = 0
+                details = []
+                
+                for f in findings:
+                    port_vulns = f.get("findings", [])
+                    vulnerabilities_count += len(port_vulns)
+                    
+                    if not port_vulns:
+                        details.append({
+                            "port": f["port"],
+                            "service": f["service"],
+                            "banner": f["banner"],
+                            "vulnerability_title": None,
+                            "severity": None
+                        })
+                    else:
+                        for vuln in port_vulns:
+                            details.append({
+                                "port": f["port"],
+                                "service": f["service"],
+                                "banner": f["banner"],
+                                "vulnerability_title": vuln.get("title"),
+                                "severity": vuln.get("severity")
+                            })
+                
+                from datetime import datetime
+                scan_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                try:
+                    database.save_network_result(scan_time, target_input.value, open_ports_count, vulnerabilities_count, details)
+                    results_list.controls.append(ft.Text("[+] Результаты успешно сохранены в базу данных.", color="#00e676"))
+                except Exception as db_ex:
+                    results_list.controls.append(ft.Text(f"[-] Ошибка сохранения в БД: {db_ex}", color="#ff1744"))
+
                 for f in findings:
                     status_line = ft.Row([
                         ft.Icon(ft.Icons.RADIO_BUTTON_ON, color="#00e676", size=14),
