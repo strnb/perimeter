@@ -48,7 +48,7 @@ def run_scan(root: str) -> list[dict]:
 
         findings += detect_ssh(file, lines)
         findings += detect_tokens(file, lines)
-        # findings += detect_passwords(file, lines)
+        findings += detect_passwords(file, lines)
         findings += run_yara(file)
         findings += detect_command_injection(file, lines)
         findings += detect_sql_injection(file, lines)
