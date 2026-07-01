@@ -2,3 +2,4 @@ yara-python
 cryptography
 httpx
 flet
+reportlab

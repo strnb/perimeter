@@ -2,6 +2,8 @@ import logging
 import flet as ft
 import api
 import asyncio
+from database import DB_PATH
+
 
 logger = logging.getLogger(__name__)
 

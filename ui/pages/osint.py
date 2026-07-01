@@ -1,5 +1,6 @@
 import flet as ft
 import api
+from database import DB_PATH
 
 def osint_page(page: ft.Page):
     header = ft.Text("Внешняя разведка (OSINT)", size=28, weight=ft.FontWeight.BOLD, color="#ffffff")

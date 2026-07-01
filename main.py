@@ -1,5 +1,6 @@
 import flet as ft
 import asyncio
+import database  # Импортируем нашу базу данных
 from ui.pages.dashboard import dashboard_page
 from ui.pages.dlp import dlp_page
 from ui.pages.network import network_page
@@ -9,6 +10,10 @@ from ui.pages.reports import reports_page
 async def main(page: ft.Page):
     page.title = "Комплекс Периметр"
     page.bgcolor = "#0b0813" 
+
+    # ВАЖНО: Создаем таблицы базы данных, если программа запущена впервые,
+    # чтобы избежать ошибок "no such table" при отрисовке отчетов
+    database.init_db()
 
     # -----------------------------------------------------------------------
     # ИНИЦИАЛИЗАЦИЯ ДИСКЛЕЙМЕРА
@@ -46,10 +51,10 @@ async def main(page: ft.Page):
         bgcolor="#18122b"
     )
 
-    # ВАЖНО: Сразу регистрируем диалог в overlay приложения, чтобы Flet знал о его существовании
+    # Регистрируем диалог в overlay приложения
     page.overlay.append(disclaimer_dialog)
 
-    # Инициализируем страницы (теперь они не будут сбрасывать состояние)
+    # Инициализируем страницы
     pages_store = {
         0: dashboard_page(page),
         1: dlp_page(page),
@@ -107,9 +112,9 @@ async def main(page: ft.Page):
         )
     )
 
-    # Функция таска: плавно и гарантированно открывает окно поверх готового UI
+    # Открытие дисклеймера поверх готового UI
     async def show_disclaimer_task():
-        await asyncio.sleep(0.3)  # Микропауза, пока собирается главное окно
+        await asyncio.sleep(0.3)
         disclaimer_dialog.open = True
         page.update()
 
