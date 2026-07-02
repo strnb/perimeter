@@ -6,7 +6,12 @@ from typing import List, Optional
 # ИСПРАВЛЕННЫЕ ИМПОРТЫ: используем полные пути от корня проекта
 from core.modules.scanner.results import ScanResult
 from core.modules.scanner.banner import grab_http, grab_ssh, grab_ftp, grab_generic, check_tomcat_default_creds
-from core.modules.scanner.db_checker import check_redis, check_mongo, check_mysql_weak_creds, check_postgres_weak_creds, check_smb_ghost
+from core.modules.scanner.db_checker import (
+    check_redis, check_mongo, check_mysql_weak_creds,
+    check_postgres_weak_creds, check_smb_ghost,
+    check_telnet_banner, check_rpcbind, check_nfs,
+    check_irc, check_distccd, check_bind_shell,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -33,6 +38,40 @@ async def _identify_service(host: str, port: int) -> tuple[str, Optional[str]]:
             banner = await grab_ssh(host, port)
             return "ssh", banner
 
+        elif port == 23:
+            res = await check_telnet_banner(host, port)
+            return "telnet", res.get("banner") or "open"
+
+        elif port == 111:
+            res = await check_rpcbind(host, port)
+            if res.get("vulnerable"):
+                return "rpcbind", "VULNERABLE: portmapper accessible"
+            return "rpcbind", "open"
+
+        elif port == 2049:
+            res = await check_nfs(host, port)
+            if res.get("vulnerable"):
+                return "nfs", "VULNERABLE: NFS port exposed"
+            return "nfs", "open"
+
+        elif port in [6667, 6697]:
+            res = await check_irc(host, port)
+            banner_str = res.get("banner", "")
+            if res.get("vulnerable"):
+                return "irc", f"VULNERABLE: {banner_str}"
+            return "irc", banner_str or "open"
+
+        elif port == 3632:
+            res = await check_distccd(host, port)
+            if res.get("vulnerable"):
+                return "distccd", "VULNERABLE: distccd exposed (CVE-2004-2687)"
+            return "distccd", "open"
+
+        elif port == 1524:
+            res = await check_bind_shell(host, port)
+            if res.get("vulnerable"):
+                return "shell", f"VULNERABLE: bind shell detected | banner: {res.get('banner')}"
+            return "shell", res.get("banner") or "open"
         elif port == 8180:
             # Специфичный порт Tomcat для Metasploitable 2
             res = await check_tomcat_default_creds(host, port)
