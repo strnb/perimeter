@@ -4,35 +4,42 @@ from typing import Optional
 import httpx
 
 from core.modules.web_scanner.types import WebCheck, WebFinding
+from core.modules.web_scanner.config import ACTIVE_PROFILE
 
 logger = logging.getLogger(__name__)
 
 CHECK_NAME = "Reflected XSS"
-TARGET_PATH = "/vulnerabilities/xss_r/"
 REQUEST_TIMEOUT = 3.0
-PAYLOAD = "PerimeterXSS'\"<>"
+PAYLOAD = "PerimeterXSS'\"<script>alert(1)</script>"
 
 
 async def run_check(client: httpx.AsyncClient, base_url: str) -> Optional[WebFinding]:
     """
-    Тестирует веб-приложение на наличие уязвимости Reflected XSS.
+    Reflected XSS: отправляем payload в параметр, проверяем что он
+    отражается в теле ответа без экранирования.
+    Теперь путь и параметр берутся из конфига таргета, а не хардкода.
     """
-    target_url = f"{base_url}{TARGET_PATH}"
+    profile = ACTIVE_PROFILE
+    target_url = f"{base_url}{profile.xss_path}"
 
     try:
-        response = await client.get(target_url, params={"name": PAYLOAD}, timeout=REQUEST_TIMEOUT)
+        response = await client.get(
+            target_url,
+            params={profile.xss_param: PAYLOAD},
+            timeout=REQUEST_TIMEOUT
+        )
         if response.status_code != 200:
             return None
 
-        # Если сервер возвращает спецсимволы без санитизации (не превратил < > в < >)
-        if PAYLOAD in response.text:
+        # Проверяем что payload НЕ был экранирован (< не превратилось в &lt;)
+        if PAYLOAD in response.text or "<script>alert(1)</script>" in response.text:
             return WebFinding(
-                url=target_url,
+                url=f"{target_url}?{profile.xss_param}={PAYLOAD}",
                 vuln_type="Reflected XSS",
                 severity="HIGH",
                 detail=(
-                    "Входные данные отражаются сервером без должной фильтрации. "
-                    f"Браузер может выполнить произвольный JS-код. Payload: {PAYLOAD}"
+                    f"Параметр '{profile.xss_param}' отражается в ответе без санитизации. "
+                    f"Браузер выполнит произвольный JS. Payload: {PAYLOAD[:40]}..."
                 ),
                 kb_id="VULN-036",
             )
