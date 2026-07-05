@@ -6,19 +6,25 @@ from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 from reportlab.pdfbase import pdfmetrics
 from reportlab.pdfbase.ttfonts import TTFont
 import os
+from pathlib import Path
 from datetime import datetime
 
 from database import DB_PATH
 
 def register_fonts():
-    """Регистрация шрифта для поддержки кириллицы."""
+    """Кроссплатформенная регистрация шрифта DejaVuSans с поддержкой кириллицы."""
     try:
-        pdfmetrics.registerFont(TTFont('Arial', 'C:\\Windows\\Fonts\\arial.ttf'))
-    except:
-        try:
-            pdfmetrics.registerFont(TTFont('Arial', 'arial.ttf'))
-        except:
-            pass
+        # Пытаемся найти шрифт в папке assets относительно корня проекта
+        font_path = Path(__file__).parent.parent.parent / "assets" / "DejaVuSans.ttf"
+        if not font_path.exists():
+            # Альтернативный поиск от текущей рабочей директории
+            font_path = Path("assets/DejaVuSans.ttf").resolve()
+            
+        pdfmetrics.registerFont(TTFont('DejaVuSans', str(font_path)))
+    except Exception as e:
+        print(f"[ERROR] Не удалось загрузить кастомный шрифт: {e}")
+        # Фолбэк на базовый шрифт, если ничего не вышло (могут быть квадраты, но скрипт не упадет)
+        pdfmetrics.registerFont(TTFont('DejaVuSans', 'Helvetica'))
 
 def make_recommendation_box(text, style):
     """Создает красивую зеленую плашку для рекомендаций."""
@@ -47,37 +53,40 @@ def make_warning_box(text, style):
 def generate_pdf_report(target_pdf_path):
     register_fonts()
     
-    # Увеличили отступы для более профессионального вида
     doc = SimpleDocTemplate(target_pdf_path, pagesize=letter, rightMargin=45, leftMargin=40, topMargin=45, bottomMargin=45)
     story = []
     
-    styles = getSampleStyleSheet()
-    
-    # Кастомные стили с поддержкой кириллицы
+    # Кастомные стили с поддержкой кириллицы через DejaVuSans
     title_style = ParagraphStyle(
-        'TitleStyle', fontName='Arial', fontSize=24, leading=28, textColor=colors.HexColor("#130f22"), spaceAfter=6, alignment=1
+        'TitleStyle', fontName='DejaVuSans', fontSize=20, leading=26, textColor=colors.HexColor("#130f22"), spaceAfter=6, alignment=1
     )
     subtitle_style = ParagraphStyle(
-        'SubtitleStyle', fontName='Arial', fontSize=11, leading=15, textColor=colors.HexColor("#555555"), spaceAfter=20, alignment=1
+        'SubtitleStyle', fontName='DejaVuSans', fontSize=10, leading=14, textColor=colors.HexColor("#555555"), spaceAfter=20, alignment=1
     )
     h1_style = ParagraphStyle(
-        'H1Style', fontName='Arial', fontSize=16, leading=20, textColor=colors.HexColor("#1a1a1a"), spaceBefore=18, spaceAfter=10, keepWithNext=True
+        'H1Style', fontName='DejaVuSans', fontSize=14, leading=18, textColor=colors.HexColor("#1a1a1a"), spaceBefore=18, spaceAfter=10, keepWithNext=True
     )
     h2_style = ParagraphStyle(
-        'H2Style', fontName='Arial', fontSize=12, leading=16, textColor=colors.HexColor("#251b45"), spaceBefore=12, spaceAfter=6, keepWithNext=True
+        'H2Style', fontName='DejaVuSans', fontSize=11, leading=15, textColor=colors.HexColor("#251b45"), spaceBefore=12, spaceAfter=6, keepWithNext=True
     )
     body_style = ParagraphStyle(
-        'BodyStyle', fontName='Arial', fontSize=10, leading=14, textColor=colors.HexColor("#333333"), spaceAfter=8
+        'BodyStyle', fontName='DejaVuSans', fontSize=9, leading=13, textColor=colors.HexColor("#333333"), spaceAfter=8
     )
     bullet_style = ParagraphStyle(
-        'BulletStyle', fontName='Arial', fontSize=10, leading=14, textColor=colors.HexColor("#333333"), leftIndent=15, firstLineIndent=-10, spaceAfter=4
+        'BulletStyle', fontName='DejaVuSans', fontSize=9, leading=13, textColor=colors.HexColor("#333333"), leftIndent=15, firstLineIndent=-10, spaceAfter=4
+    )
+    table_cell_style = ParagraphStyle(
+        'TableCellStyle', fontName='DejaVuSans', fontSize=8, leading=11, textColor=colors.HexColor("#333333")
+    )
+    table_header_style = ParagraphStyle(
+        'TableHeaderStyle', fontName='DejaVuSans', fontSize=8, leading=11, textColor=colors.whitesmoke, bold=True
     )
     
-    # Подключаемся к нашей единой БД
+    # Подключаемся к БД
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
     
-    # Сбор статистики для Executive Summary
+    # Сбор статистики
     try:
         cursor.execute("SELECT COUNT(*) FROM osint_results")
         total_osint = cursor.fetchone()[0]
@@ -92,10 +101,7 @@ def generate_pdf_report(target_pdf_path):
         dlp_medium = dlp_stats[2] if dlp_stats[2] else 0
         dlp_low = dlp_stats[3] if dlp_stats[3] else 0
     except:
-        total_dlp = 0
-        dlp_critical = 0
-        dlp_medium = 0
-        dlp_low = 0
+        total_dlp, dlp_critical, dlp_medium, dlp_low = 0, 0, 0, 0
 
     try:
         cursor.execute("SELECT COUNT(*), SUM(open_ports_count), SUM(vulnerabilities_count) FROM network_results")
@@ -104,11 +110,9 @@ def generate_pdf_report(target_pdf_path):
         net_ports = net_stats[1] if net_stats[1] else 0
         net_vulns = net_stats[2] if net_stats[2] else 0
     except:
-        total_net = 0
-        net_ports = 0
-        net_vulns = 0
+        total_net, net_ports, net_vulns = 0, 0, 0
 
-    # Расчет текущего индекса безопасности на основе последнего DLP сканирования
+    # Расчет индекса безопасности
     current_index = 100
     try:
         cursor.execute("SELECT critical_count, medium_count, low_count FROM dlp_results ORDER BY id DESC LIMIT 1")
@@ -126,103 +130,100 @@ def generate_pdf_report(target_pdf_path):
     story.append(Paragraph("Сводный аналитический отчет по результатам комплексного исследования", subtitle_style))
     story.append(Spacer(1, 10))
     
-    # Метаданные отчета
+    meta_headers = [Paragraph("Параметр", table_header_style), Paragraph("Значение", table_header_style)]
     meta_data = [
-        ["Параметр", "Значение"],
-        ["Дата генерации отчета", datetime.now().strftime("%Y-%m-%d %H:%M:%S")],
-        ["Используемая СУБД", "SQLite 3 (perimeter.db)"],
-        ["Статус аудита", "Завершен"],
-        ["Класс системы", "Автоматизированный сканер защищенности"]
+        meta_headers,
+        [Paragraph("Дата генерации отчета", table_cell_style), Paragraph(datetime.now().strftime("%Y-%m-%d %H:%M:%S"), table_cell_style)],
+        [Paragraph("Используемая СУБД", table_cell_style), Paragraph("SQLite 3 (perimeter.db)", table_cell_style)],
+        [Paragraph("Статус аудита", table_cell_style), Paragraph("Завершен", table_cell_style)],
+        [Paragraph("Класс системы", table_cell_style), Paragraph("Автоматизированный сканер защищенности", table_cell_style)]
     ]
     meta_table = Table(meta_data, colWidths=[180, 320])
     meta_table.setStyle(TableStyle([
         ('BACKGROUND', (0,0), (-1,0), colors.HexColor("#130f22")),
-        ('TEXTCOLOR', (0,0), (-1,0), colors.whitesmoke),
-        ('FONTNAME', (0,0), (-1,-1), 'Arial'),
-        ('FONTSIZE', (0,0), (-1,-1), 9),
         ('GRID', (0,0), (-1,-1), 0.5, colors.HexColor("#e0e0e0")),
         ('PADDING', (0,0), (-1,-1), 6),
+        ('VALIGN', (0,0), (-1,-1), 'TOP'),
     ]))
     story.append(meta_table)
     story.append(Spacer(1, 20))
     
-    # --- РАЗДЕЛ 1. СВОДНАЯ АНАЛИТИКА (EXECUTIVE SUMMARY) ---
+    # --- РАЗДЕЛ 1. СВОДНАЯ АНАЛИТИКА ---
     story.append(Paragraph("1. Сводная аналитика (Executive Summary)", h1_style))
     story.append(Paragraph(
         "Настоящий отчет содержит агрегированные результаты сканирования внешнего периметра, "
-        "анализа локальных директорий на предмет утечек конфиденциальных данных (DLP) и сетевого аудита портов. "
-        "Целью исследования является выявление потенциальных векторов атак, уязвимостей в конфигурации и несанкционированного раскрытия секретов.",
+        "анализа локальных директорий на предмет утечек конфиденциальных данных (DLP) и сетевого аудита портов.",
         body_style
     ))
     
-    # Карточка индекса безопасности
     index_color = "#00e676" if current_index > 70 else ("#ff9100" if current_index > 40 else "#ff1744")
     index_text = f"<b>Текущий Индекс Безопасности: <font color='{index_color}'>{current_index}/100</font></b>"
     story.append(Paragraph(index_text, h2_style))
     
     if current_index > 70:
-        story.append(Paragraph("Уровень защищенности оценивается как <b>ВЫСОКИЙ</b>. Критических угроз безопасности в ходе последнего сканирования DLP не обнаружено. Рекомендуется поддерживать текущий режим обновлений и контроля доступа.", body_style))
+        story.append(Paragraph("Уровень защищенности оценивается как <b>ВЫСОКИЙ</b>. Критических угроз безопасности в ходе последнего сканирования DLP не обнаружено.", body_style))
     elif current_index > 40:
-        story.append(Paragraph("Уровень защищенности оценивается как <b>СРЕДНИЙ</b>. Обнаружены умеренные риски и уязвимости, требующие внимания администратора безопасности. Рекомендуется провести плановое устранение замечаний.", body_style))
+        story.append(Paragraph("Уровень защищенности оценивается как <b>СРЕДНИЙ</b>. Обнаружены умеренные риски и уязвимости, требующие внимания администратора безопасности.", body_style))
     else:
-        story.append(Paragraph("Уровень защищенности оценивается как <b>КРИТИЧЕСКИ НИЗКИЙ</b>! Обнаружены критические уязвимости или утечки конфиденциальных данных. Требуется незамедлительное вмешательство специалистов для локализации угроз.", body_style))
-        story.append(make_warning_box("Обнаружены критические инциденты безопасности! Ознакомьтесь с деталями в соответствующих разделах отчета и примите срочные меры по их устранению.", body_style))
+        story.append(Paragraph("Уровень защищенности оценивается как <b>КРИТИЧЕСКИ НИЗКИЙ</b>! Требуется незамедлительное вмешательство специалистов.", body_style))
+        story.append(make_warning_box("Обнаружены критические инциденты безопасности! Ознакомьтесь с деталями в соответствующих разделах отчета.", body_style))
         story.append(Spacer(1, 10))
 
-    # Сводная таблица статистики
+    stats_headers = [Paragraph("Модуль подсистемы", table_header_style), Paragraph("Всего сканирований", table_header_style), Paragraph("Обнаружено угроз / деталей", table_header_style)]
     stats_data = [
-        ["Модуль подсистемы", "Всего сканирований", "Обнаружено угроз / деталей"],
-        ["Внешняя разведка (OSINT)", str(total_osint), f"Найдено поддоменов в сумме: {total_osint * 3 if total_osint else 0}"],
-        ["Мониторинг утечек (DLP)", str(total_dlp), f"Критических: {dlp_critical} | Средних: {dlp_medium} | Низких: {dlp_low}"],
-        ["Сетевой анализатор (Network)", str(total_net), f"Открытых портов: {net_ports} | Уязвимостей: {net_vulns}"]
+        stats_headers,
+        [Paragraph("Внешняя разведка (OSINT)", table_cell_style), Paragraph(str(total_osint), table_cell_style), Paragraph(f"Найдено поддоменов в сумме: {total_osint * 3 if total_osint else 0}", table_cell_style)],
+        [Paragraph("Мониторинг утечек (DLP)", table_cell_style), Paragraph(str(total_dlp), table_cell_style), Paragraph(f"Критических: {dlp_critical} | Средних: {dlp_medium} | Низких: {dlp_low}", table_cell_style)],
+        [Paragraph("Сетевой анализатор (Network)", table_cell_style), Paragraph(str(total_net), table_cell_style), Paragraph(f"Открытых портов: {net_ports} | Уязвимостей: {net_vulns}", table_cell_style)]
     ]
     stats_table = Table(stats_data, colWidths=[180, 120, 200])
     stats_table.setStyle(TableStyle([
         ('BACKGROUND', (0,0), (-1,0), colors.HexColor("#251b45")),
-        ('TEXTCOLOR', (0,0), (-1,0), colors.whitesmoke),
-        ('FONTNAME', (0,0), (-1,-1), 'Arial'),
-        ('FONTSIZE', (0,0), (-1,-1), 9),
         ('GRID', (0,0), (-1,-1), 0.5, colors.HexColor("#e0e0e0")),
         ('PADDING', (0,0), (-1,-1), 6),
+        ('VALIGN', (0,0), (-1,-1), 'TOP'),
     ]))
     story.append(stats_table)
     story.append(Spacer(1, 15))
     
     # --- РАЗДЕЛ 2. ВНЕШНЯЯ РАЗВЕДКА (OSINT) ---
     story.append(Paragraph("2. Результаты внешней разведки (OSINT)", h1_style))
-    story.append(Paragraph(
-        "Подсистема OSINT осуществляет сбор информации из открытых источников без прямого агрессивного воздействия на исследуемый объект. "
-        "В ходе работы анализируются регистрационные данные доменного имени (WHOIS), записи DNS-серверов, а также проводится поиск активных поддоменов "
-        "для определения полной карты внешнего периметра организации.",
-        body_style
-    ))
+    story.append(Paragraph("Подсистема OSINT осуществляет сбор информации из открытых источников без прямого воздействия на объект.", body_style))
     
     try:
         cursor.execute("SELECT scan_time, target_domain, registrar, subdomains_count FROM osint_results ORDER BY id DESC LIMIT 5")
         osint_data = cursor.fetchall()
-    except sqlite3.OperationalError:
+    except:
         osint_data = []
 
     if osint_data:
-        table_data = [["Время сканирования", "Целевой домен", "Регистратор", "Кол-во поддоменов"]]
+        table_data = [[
+            Paragraph("Время сканирования", table_header_style), 
+            Paragraph("Целевой домен", table_header_style), 
+            Paragraph("Регистратор", table_header_style), 
+            Paragraph("Кол-во поддоменов", table_header_style)
+        ]]
         for row in osint_data:
-            table_data.append([str(row[0]), str(row[1]), str(row[2]), str(row[3])])
+            table_data.append([
+                Paragraph(str(row[0]), table_cell_style), 
+                Paragraph(str(row[1]), table_cell_style), 
+                Paragraph(str(row[2]), table_cell_style), 
+                Paragraph(str(row[3]), table_cell_style)
+            ])
         
         t = Table(table_data, colWidths=[120, 130, 150, 100])
         t.setStyle(TableStyle([
             ('BACKGROUND', (0,0), (-1,0), colors.HexColor("#130f22")),
-            ('TEXTCOLOR', (0,0), (-1,0), colors.whitesmoke),
-            ('FONTNAME', (0,0), (-1,-1), 'Arial'),
-            ('FONTSIZE', (0,0), (-1,-1), 9),
             ('GRID', (0,0), (-1,-1), 0.5, colors.HexColor("#e0e0e0")),
             ('PADDING', (0,0), (-1,-1), 6),
+            ('VALIGN', (0,0), (-1,-1), 'TOP'),
         ]))
         story.append(t)
         story.append(Spacer(1, 10))
         story.append(make_recommendation_box(
-            "1. Скройте персональные данные администратора домена в WHOIS (услуга Private Person / Privacy Protection).<br/>"
-            "2. Настройте DNSSEC для защиты от подмены DNS-ответов (DNS Spoofing).<br/>"
-            "3. Регулярно проводите инвентаризацию поддоменов для исключения 'заброшенных' ресурсов (Subdomain Takeover).",
+            "1. Скройте персональные данные администратора домена в WHOIS.<br/>"
+            "2. Настройте DNSSEC для защиты от подмены DNS-ответов.<br/>"
+            "3. Регулярно проводите инвентаризацию поддоменов.",
             body_style
         ))
     else:
@@ -232,39 +233,44 @@ def generate_pdf_report(target_pdf_path):
 
     # --- РАЗДЕЛ 3. АНАЛИЗ УТЕЧЕК ДАННЫХ (DLP) ---
     story.append(Paragraph("3. Результаты анализа утечек данных (DLP)", h1_style))
-    story.append(Paragraph(
-        "Модуль DLP (Data Loss Prevention) предназначен для локального мониторинга исходного кода и конфигурационных файлов проекта. "
-        "Он осуществляет поиск конфиденциальной информации, случайно оставленной разработчиками в открытом виде: приватных ключей SSH/PGP, "
-        "паролей от баз данных, токенов API (Telegram, AWS, GitHub, OpenAI и др.). Наличие таких данных в репозитории несет критическую угрозу.",
-        body_style
-    ))
+    story.append(Paragraph("Модуль DLP предназначен для локального мониторинга исходного кода и конфигурационных файлов проекта на наличие секретов.", body_style))
     
     try:
         cursor.execute("SELECT scan_time, checked_path, critical_count, medium_count, low_count FROM dlp_results ORDER BY id DESC LIMIT 5")
         dlp_data = cursor.fetchall()
-    except sqlite3.OperationalError:
+    except:
         dlp_data = []
     
     if dlp_data:
-        table_data = [["Время", "Сканируемый путь", "Крит.", "Средн.", "Низк."]]
+        table_data = [[
+            Paragraph("Время", table_header_style), 
+            Paragraph("Сканируемый путь", table_header_style), 
+            Paragraph("Крит.", table_header_style), 
+            Paragraph("Средн.", table_header_style), 
+            Paragraph("Низк.", table_header_style)
+        ]]
         for row in dlp_data:
-            table_data.append([str(row[0]), str(row[1]), str(row[2]), str(row[3]), str(row[4])])
+            table_data.append([
+                Paragraph(str(row[0]), table_cell_style), 
+                Paragraph(str(row[1]), table_cell_style), 
+                Paragraph(str(row[2]), table_cell_style), 
+                Paragraph(str(row[3]), table_cell_style), 
+                Paragraph(str(row[4]), table_cell_style)
+            ])
             
         t = Table(table_data, colWidths=[110, 210, 60, 60, 60])
         t.setStyle(TableStyle([
             ('BACKGROUND', (0,0), (-1,0), colors.HexColor("#251b45")),
-            ('TEXTCOLOR', (0,0), (-1,0), colors.whitesmoke),
-            ('FONTNAME', (0,0), (-1,-1), 'Arial'),
-            ('FONTSIZE', (0,0), (-1,-1), 9),
             ('GRID', (0,0), (-1,-1), 0.5, colors.HexColor("#e0e0e0")),
             ('PADDING', (0,0), (-1,-1), 6),
+            ('VALIGN', (0,0), (-1,-1), 'TOP'),
         ]))
         story.append(t)
         story.append(Spacer(1, 10))
         story.append(make_recommendation_box(
-            "1. Никогда не храните пароли и API-токены в исходном коде. Используйте переменные окружения (.env) или специализированные хранилища (HashiCorp Vault).<br/>"
-            "2. Добавьте файлы с секретами и локальными настройками в файл .gitignore, чтобы предотвратить их попадание в Git-репозиторий.<br/>"
-            "3. В случае обнаружения утечки незамедлительно отзовите (деактивируйте) скомпрометированный токен или пароль и выпустите новый.",
+            "1. Никогда не храните пароли и API-токены в исходном коде.<br/>"
+            "2. Добавьте файлы с секретами в файл .gitignore.<br/>"
+            "3. В случае обнаружения утечки незамедлительно отзывайте скомпрометированные ключи.",
             body_style
         ))
     else:
@@ -272,19 +278,14 @@ def generate_pdf_report(target_pdf_path):
 
     story.append(Spacer(1, 15))
 
-    # --- РАЗДЕЛ 4. СЕТЕВОЙ АУДИТ (NETWORK SCANNER) ---
+    # --- РАЗДЕЛ 4. СЕТЕВОЙ АУДИТ ---
     story.append(Paragraph("4. Результаты сетевого сканирования (Network)", h1_style))
-    story.append(Paragraph(
-        "Сетевой анализатор осуществляет сканирование портов целевых хостов для определения активных сетевых служб и их версий (баннеров). "
-        "На основе полученных данных проводится сопоставление со встроенной базой сигнатур уязвимостей для выявления устаревшего ПО, "
-        "небезопасных конфигураций и потенциально уязвимых сетевых интерфейсов.",
-        body_style
-    ))
+    story.append(Paragraph("Сетевой анализатор осуществляет сканирование портов целевых хостов для определения активных сетевых служб.", body_style))
     
     try:
         cursor.execute("SELECT id, scan_time, target, open_ports_count, vulnerabilities_count FROM network_results ORDER BY id DESC LIMIT 5")
         network_data = cursor.fetchall()
-    except sqlite3.OperationalError:
+    except:
         network_data = []
 
     if network_data:
@@ -293,35 +294,41 @@ def generate_pdf_report(target_pdf_path):
             story.append(Paragraph(f"<b>Цель сканирования:</b> {target} | <b>Время:</b> {scan_time} | <b>Открытых портов:</b> {open_ports} | <b>Уязвимостей:</b> {vulns}", h2_style))
             story.append(Spacer(1, 4))
             
-            # Получаем детали для этого сканирования
             cursor.execute("SELECT port, service, banner, vulnerability_title, severity FROM network_details WHERE result_id = ?", (result_id,))
             details = cursor.fetchall()
             
             if details:
-                table_data = [["Порт", "Служба", "Баннер", "Уязвимость", "Риск"]]
+                table_data = [[
+                    Paragraph("Порт", table_header_style), 
+                    Paragraph("Служба", table_header_style), 
+                    Paragraph("Баннер", table_header_style), 
+                    Paragraph("Уязвимость", table_header_style), 
+                    Paragraph("Риск", table_header_style)
+                ]]
                 for d_row in details:
                     port, service, banner, vuln_title, severity = d_row
-                    vuln_title = vuln_title if vuln_title else "-"
-                    severity = severity if severity else "-"
-                    banner = banner if banner else "-"
-                    table_data.append([str(port), str(service), str(banner), str(vuln_title), str(severity)])
+                    table_data.append([
+                        Paragraph(str(port), table_cell_style), 
+                        Paragraph(str(service), table_cell_style), 
+                        Paragraph(str(banner if banner else "-"), table_cell_style), 
+                        Paragraph(str(vuln_title if vuln_title else "-"), table_cell_style), 
+                        Paragraph(str(severity if severity else "-"), table_cell_style)
+                    ])
                 
                 t = Table(table_data, colWidths=[50, 80, 120, 180, 70])
                 t.setStyle(TableStyle([
                     ('BACKGROUND', (0,0), (-1,0), colors.HexColor("#393053")),
-                    ('TEXTCOLOR', (0,0), (-1,0), colors.whitesmoke),
-                    ('FONTNAME', (0,0), (-1,-1), 'Arial'),
-                    ('FONTSIZE', (0,0), (-1,-1), 8),
                     ('GRID', (0,0), (-1,-1), 0.5, colors.HexColor("#e0e0e0")),
                     ('PADDING', (0,0), (-1,-1), 5),
+                    ('VALIGN', (0,0), (-1,-1), 'TOP'),
                 ]))
                 story.append(t)
                 story.append(Spacer(1, 8))
         
         story.append(make_recommendation_box(
-            "1. Закройте неиспользуемые порты на внешнем сетевом интерфейсе с помощью брандмауэра (iptables / ufw / Windows Firewall).<br/>"
-            "2. Отключите передачу подробных версий ПО в баннерах ответов служб (например, директива server_tokens off в nginx).<br/>"
-            "3. Регулярно обновляйте системное ПО и сетевые службы до актуальных стабильных версий для устранения известных CVE.",
+            "1. Закройте неиспользуемые порты на внешнем сетевом интерфейсе с помощью брандмауэра.<br/>"
+            "2. Отключите передачу подробных версий ПО в баннерах ответов служб.<br/>"
+            "3. Регулярно обновляйте системное ПО и сетевые службы.",
             body_style
         ))
     else:
@@ -329,23 +336,17 @@ def generate_pdf_report(target_pdf_path):
 
     story.append(Spacer(1, 15))
     
-    # --- РАЗДЕЛ 5. ЗАКЛЮЧЕНИЕ И ПЛАН ДЕЙСТВИЙ ---
+    # --- РАЗДЕЛ 5. ЗАКЛЮЧЕНИЕ ---
     story.append(Paragraph("5. Заключение и приоритетный план действий", h1_style))
-    story.append(Paragraph(
-        "По результатам проведенного комплексного аудита безопасности рекомендуется выполнить следующие первоочередные шаги "
-        "для минимизации рисков несанкционированного доступа и утечки конфиденциальной информации:",
-        body_style
-    ))
     
-    story.append(Paragraph("<b>[Приоритет 1 - КРИТИЧЕСКИЙ]</b> Локализовать и устранить все утечки секретов, обнаруженные модулем DLP. Провести ротацию скомпрометированных ключей и паролей.", bullet_style))
-    story.append(Paragraph("<b>[Приоритет 2 - ВЫСОКИЙ]</b> Настроить правила межсетевого экрана для ограничения доступа к административным портам (SSH, RDP, СУБД) из внешней сети.", bullet_style))
-    story.append(Paragraph("<b>[Приоритет 3 - СРЕДНИЙ]</b> Обновить версии ПО на сетевых службах, для которых были обнаружены известные уязвимости или устаревшие баннеры.", bullet_style))
-    story.append(Paragraph("<b>[Приоритет 4 - НИЗКИЙ]</b> Провести аудит DNS-записей и WHOIS-информации доменных имен организации, настроить политики безопасности почты (SPF, DKIM, DMARC).", bullet_style))
+    story.append(Paragraph("<b>[Приоритет 1 - КРИТИЧЕСКИЙ]</b> Локализовать и устранить все утечки секретов, обнаруженные модулем DLP.", bullet_style))
+    story.append(Paragraph("<b>[Приоритет 2 - ВЫСОКИЙ]</b> Настроить правила межсетевого экрана для ограничения доступа к административным портам.", bullet_style))
+    story.append(Paragraph("<b>[Приоритет 3 - СРЕДНИЙ]</b> Обновить версии ПО на сетевых службах, для которых были обнаружены известные уязвимости.", bullet_style))
+    story.append(Paragraph("<b>[Приоритет 4 - НИЗКИЙ]</b> Провести аудит DNS-записей и WHOIS-информации доменных имен организации.", bullet_style))
     
     story.append(Spacer(1, 15))
-    story.append(Paragraph("<i>Отчет сформирован автоматически. Данный документ носит конфиденциальный характер и предназначен исключительно для внутреннего использования техническими специалистами и администраторами безопасности организации.</i>", body_style))
+    story.append(Paragraph("<i>Отчет сформирован автоматически и предназначен исключительно для внутреннего использования техническими специалистами.</i>", body_style))
 
     conn.close()    
-    # Сборка
     print(f"[DEBUG] Элементов в story перед сборкой: {len(story)}")
     doc.build(story)

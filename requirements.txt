@@ -3,3 +3,4 @@ cryptography
 httpx
 flet
 reportlab
+pathlib

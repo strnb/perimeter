@@ -1,6 +1,7 @@
 import flet as ft
 import api
 import database
+
 def osint_page(page: ft.Page):
     header = ft.Text("Внешняя разведка (OSINT)", size=28, weight=ft.FontWeight.BOLD, color="#ffffff")
 
@@ -17,13 +18,25 @@ def osint_page(page: ft.Page):
     console_output = ft.ListView(expand=True, spacing=5)
 
     async def start_osint_scan(e):
+        domain = domain_input.value.strip() if domain_input.value else ""
+        
+        # ВАЛИДАЦИЯ ВВОДА: Проверка на пустоту или отсутствие точки в домене
+        if not domain or "." not in domain:
+            snack = ft.SnackBar(
+                content=ft.Text("Введите корректный домен (например, google.com)"),
+                bgcolor="#b71c1c"
+            )
+            page.overlay.append(snack)
+            snack.open = True
+            page.update()
+            return  # Гарантированный останов выполнения
         console_output.controls.clear()
-        console_output.controls.append(ft.Text(f"[*] Запуск OSINT-пайплайна для {domain_input.value}...", font_family="Courier New", color="#b388ff"))
+        console_output.controls.append(ft.Text(f"[*] Запуск OSINT-пайплайна для {domain}...", font_family="Courier New", color="#b388ff"))
         page.update()
 
         try:
             # Вызываем функцию из api.py
-            result = await api.run_osint_report(domain_input.value, wordlist_path="core/subdomains_wordlist.txt")
+            result = await api.run_osint_report(domain, wordlist_path="core/subdomains_wordlist.txt")
             
             console_output.controls.append(ft.Text("[+] Разведка завершена:", font_family="Courier New", color="#00e676"))
             
@@ -35,7 +48,7 @@ def osint_page(page: ft.Page):
                 # Сохраняем результаты в БД
                 from datetime import datetime
                 scan_time = result.get('scan_time') or datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-                target_domain = result.get('domain', domain_input.value)
+                target_domain = result.get('domain', domain)
                 whois_data = result.get('whois', {})
                 registrar = whois_data.get('registrar') or whois_data.get('registrar_name') or whois_data.get('Регистратор') or 'Неизвестно'
                 subdomains_count = len(result.get('subdomains', []))
@@ -46,7 +59,7 @@ def osint_page(page: ft.Page):
                 except Exception as db_ex:
                     console_output.controls.append(ft.Text(f"[-] Ошибка сохранения в БД: {db_ex}", font_family="Courier New", color="#ff1744"))
 
-                console_output.controls.append(ft.Text(f" -> Домен: {result.get('domain', domain_input.value)}", font_family="Courier New", color="#ffffff"))
+                console_output.controls.append(ft.Text(f" -> Домен: {result.get('domain', domain)}", font_family="Courier New", color="#ffffff"))
                 console_output.controls.append(ft.Text(f" -> Время сканирования: {result.get('scan_time', '-')}", font_family="Courier New", color="#ffffff"))
                 
                 # WHOIS
@@ -96,7 +109,6 @@ def osint_page(page: ft.Page):
         bgcolor="#18122b",
         padding=20,
         border_radius=12,
-        # ИСПРАВЛЕНО: Безопасное объявление границ без использования .all()
         border=ft.Border(
             top=ft.BorderSide(1, "#393053"),
             bottom=ft.BorderSide(1, "#393053"),

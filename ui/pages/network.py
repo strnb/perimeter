@@ -17,8 +17,14 @@ def network_page(page: ft.Page):
 
     async def start_scan_click(e):
         if not target_input.value:
-            return
-        
+            snack = ft.SnackBar(
+                content=ft.Text("Введите IP-адрес, домен или подсеть CIDR"),
+                bgcolor="#b71c1c"
+            )
+            page.overlay.append(snack)
+            snack.open = True
+            page.update()
+            return        
         results_list.controls.clear()
         results_list.controls.append(ft.Text("[*] Сканирование портов запущено...", color="#b388ff"))
         page.update() # ИСПРАВЛЕНО
