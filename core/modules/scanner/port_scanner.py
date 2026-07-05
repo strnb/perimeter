@@ -10,7 +10,7 @@ from core.modules.scanner.db_checker import (
     check_redis, check_mongo, check_mysql_weak_creds,
     check_postgres_weak_creds, check_smb_ghost,
     check_telnet_banner, check_rpcbind, check_nfs,
-    check_irc, check_distccd, check_bind_shell,
+    check_irc, check_distccd, check_bind_shell, check_vnc,
 )
 
 logger = logging.getLogger(__name__)
@@ -19,7 +19,7 @@ logger = logging.getLogger(__name__)
 DEFAULT_PORTS = [
     21, 22, 23, 25, 53, 80, 111, 139, 443, 445, 512, 513, 514,
     1099, 1524, 2181, 3306, 3632, 5432, 5900, 6379, 27017, 8080, 8443, 2049,
-    2121, 6000, 6667, 6697, 8009, 8180, 8787
+    2121, 6000, 6667, 6697, 8009, 8180, 8787, 6200
 ]
 
 
@@ -38,40 +38,46 @@ async def _identify_service(host: str, port: int) -> tuple[str, Optional[str]]:
             banner = await grab_ssh(host, port)
             return "ssh", banner
 
-        elif port == 23:
+        if port == 23:
             res = await check_telnet_banner(host, port)
-            return "telnet", res.get("banner") or "open"
+            banner = f"VULNERABLE: {res.get('banner', 'Telnet open')}" if res.get("vulnerable") else res.get("banner")
+            return "telnet", banner
 
-        elif port == 111:
+        if port == 111:
             res = await check_rpcbind(host, port)
-            if res.get("vulnerable"):
-                return "rpcbind", "VULNERABLE: portmapper accessible"
-            return "rpcbind", "open"
+            banner = f"VULNERABLE: {res.get('banner')}" if res.get("vulnerable") else res.get("banner", "rpcbind open")
+            return "rpcbind", banner
 
-        elif port == 2049:
+        if port == 2049:
             res = await check_nfs(host, port)
-            if res.get("vulnerable"):
-                return "nfs", "VULNERABLE: NFS port exposed"
-            return "nfs", "open"
+            banner = f"VULNERABLE: {res.get('banner')}" if res.get("vulnerable") else res.get("banner", "NFS open")
+            return "nfs", banner
 
-        elif port in [6667, 6697]:
-            res = await check_irc(host, port)
-            banner_str = res.get("banner", "")
-            if res.get("vulnerable"):
-                return "irc", f"VULNERABLE: {banner_str}"
-            return "irc", banner_str or "open"
-
-        elif port == 3632:
+        if port == 3632:
             res = await check_distccd(host, port)
-            if res.get("vulnerable"):
-                return "distccd", "VULNERABLE: distccd exposed (CVE-2004-2687)"
-            return "distccd", "open"
+            banner = f"VULNERABLE: {res.get('detail', res.get('banner', 'distccd open'))}"
+            return "distccd", banner
 
-        elif port == 1524:
+        if port in (6667, 6697):
+            res = await check_irc(host, port)
+            banner = f"VULNERABLE: {res.get('detail', res.get('banner'))}" if res.get("vulnerable") else res.get("detail", "IRC handshake completed")
+            return "irc", banner
+
+        if port == 1524:
             res = await check_bind_shell(host, port)
-            if res.get("vulnerable"):
-                return "shell", f"VULNERABLE: bind shell detected | banner: {res.get('banner')}"
-            return "shell", res.get("banner") or "open"
+            banner = f"VULNERABLE: {res.get('banner', 'root bind shell')}" if res.get("vulnerable") else f"Ingreslock open ({res.get('banner', '')})"
+            return "ingreslock-backdoor", banner
+
+        if port == 6200:
+            res = await check_bind_shell(host, port)
+            banner = f"VULNERABLE: vsFTPd backdoor shell ({res.get('banner', '')})" if res.get("vulnerable") else "port open, no shell"
+            return "vsftpd-backdoor", banner
+
+        if port == 5900:
+            res = await check_vnc(host, port)
+            banner = res.get("banner", "VNC open")
+            return "vnc", banner
+
         elif port == 8180:
             # Специфичный порт Tomcat для Metasploitable 2
             res = await check_tomcat_default_creds(host, port)
@@ -104,7 +110,7 @@ async def _identify_service(host: str, port: int) -> tuple[str, Optional[str]]:
                 return "postgresql", f"VULNERABLE: обнаружены слабые учётные данные ({res.get('detail')})"
             return "postgresql", "open"
 
-        elif port == 445:
+        elif port in (445,139):
             # Наш новый активный пробник для SMB / Samba
             res = await check_smb_ghost(host, port)
             if res.get("vulnerable"):
@@ -121,7 +127,7 @@ async def _identify_service(host: str, port: int) -> tuple[str, Optional[str]]:
         return "unknown", None
 
 
-async def scan_port(host: str, port: int, semaphore: asyncio.Semaphore, timeout: float = 2.0) -> ScanResult:
+async def scan_port(host: str, port: int, semaphore: asyncio.Semaphore, timeout: float = 1.0) -> ScanResult:
     """Асинхронно сканирует один порт хоста с использованием семафора конкурентности."""
     async with semaphore:
         status = "closed"
@@ -168,4 +174,4 @@ async def scan_ports(target: str, ports: Optional[List[int]] = None, max_concurr
 
     logger.info(f"Запуск сканирования сети для {target}. Всего задач: {len(tasks)}")
     results = await asyncio.gather(*tasks)
-    return results
+    return [r for r in results if r.status == "open"]

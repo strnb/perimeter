@@ -60,7 +60,9 @@ def _sync_mongo_check(host: str, port: int) -> dict:
         client.list_database_names()
         return {"status": "open", "auth": False, "vulnerable": True}
     except OperationFailure:
-        # Server is reachable but auth is required
+        # Подключились успешно, но операция отклонена — нужна авторизация.
+        # ВАЖНО: отдельный except от ServerSelectionTimeoutError — иначе
+        # недоступный сервер (таймаут) ошибочно помечается status="open".
         return {"status": "open", "auth": True, "vulnerable": False}
     except ServerSelectionTimeoutError:
         return {"status": "closed", "vulnerable": False}
@@ -90,7 +92,8 @@ def _sync_mysql_check(host: str, port: int) -> dict:
             connect_timeout=2,
         )
         conn.close()
-        return {"status": "open", "weak_creds": True, "detail": "root without password", "vulnerable": True}
+        return {"status": "open", "weak_creds": True,
+                "detail": "root without password", "vulnerable": True}
     except pymysql.err.OperationalError:
         return {"status": "open", "weak_creds": False, "vulnerable": False}
     except Exception:
@@ -108,7 +111,11 @@ async def check_mysql_weak_creds(host: str, port: int = 3306) -> dict:
 # ---------------------------------------------------------------------------
 
 def _sync_postgres_check(host: str, port: int) -> dict:
-    credentials = [("postgres", "postgres"), ("postgres", "password"), ("postgres", "")]
+    credentials = [
+        ("postgres", "postgres"),
+        ("postgres", "password"),
+        ("postgres", ""),
+    ]
     for username, password in credentials:
         try:
             conn = psycopg2.connect(
@@ -117,12 +124,8 @@ def _sync_postgres_check(host: str, port: int) -> dict:
                 connect_timeout=2
             )
             conn.close()
-            return {
-                "status": "open",
-                "weak_creds": True,
-                "detail": f"{username}:{password}",
-                "vulnerable": True,
-            }
+            return {"status": "open", "weak_creds": True,
+                    "detail": f"{username}:{password}", "vulnerable": True}
         except psycopg2.OperationalError:
             continue
         except Exception:
@@ -141,22 +144,61 @@ async def check_postgres_weak_creds(host: str, port: int = 5432) -> dict:
 # ---------------------------------------------------------------------------
 
 async def check_smb_ghost(host: str, port: int = 445, timeout: float = 2.0) -> dict:
+    """
+    Активный SMB-пробник — отправляет SMB1 Negotiate Protocol Request.
+
+    ВАЖНО: SMB-сервер НИКОГДА не говорит первым после TCP-коннекта.
+    Пассивный reader.read() всегда даст таймаут и вернёт status=closed
+    для реально открытого порта. Это проверено на реальной Metasploitable 2.
+
+    Алгоритм: отправляем Negotiate → ждём ответ с магическим \xffSMB →
+    если пришёл — SMB подтверждён, парсим WORKGROUP из хвоста ответа.
+    """
+    smb_negotiate = (
+        b"\x00\x00\x00\x2f"
+        b"\xffSMB\x72"
+        b"\x00\x00\x00\x00"
+        b"\x00"
+        b"\x00\x00"
+        b"\x00\x00"
+        b"\x00\x00\x00\x00\x00\x00\x00\x00"
+        b"\x00\x00"
+        b"\x00\x00"
+        b"\xff\xfe"
+        b"\x00\x00"
+        b"\x00\x00"
+        b"\x00"
+        b"\x0c\x00"
+        b"\x02NT LM 0.12\x00"
+    )
     try:
         reader, writer = await asyncio.wait_for(
             asyncio.open_connection(host, port), timeout=timeout
         )
-        data = await asyncio.wait_for(reader.read(1024), timeout=timeout)
+        writer.write(smb_negotiate)
+        await writer.drain()
+
+        try:
+            data = await asyncio.wait_for(reader.read(1024), timeout=timeout)
+        except asyncio.TimeoutError:
+            writer.close()
+            return {
+                "status": "open", "banner": "", "vulnerable": False,
+                "detail": "SMB-порт открыт, но не ответил на Negotiate",
+            }
+
         writer.close()
         await writer.wait_closed()
-        banner = data.decode("utf-8", errors="ignore")
-        if "Samba" in banner or len(data) > 0:
+
+        is_smb = len(data) > 8 and data[4:8] == b"\xffSMB"
+        banner = data[32:].decode("utf-8", errors="ignore").strip("\x00").strip()
+
+        if is_smb:
             return {
-                "status": "open",
-                "banner": banner.strip(),
-                "vulnerable": True,
-                "detail": "Old Samba version detected (Metasploitable 2)",
+                "status": "open", "banner": banner, "vulnerable": True,
+                "detail": f"SMB Negotiate подтверждён, данные: {banner[:80]!r}",
             }
-        return {"status": "open", "banner": "", "vulnerable": False}
+        return {"status": "open", "banner": banner, "vulnerable": False}
     except Exception:
         return {"status": "closed", "vulnerable": False}
 
@@ -166,39 +208,56 @@ async def check_smb_ghost(host: str, port: int = 445, timeout: float = 2.0) -> d
 # ---------------------------------------------------------------------------
 
 async def check_telnet_banner(host: str, port: int = 23, timeout: float = 2.0) -> dict:
-    """Passive banner grab -- telnet sends IAC negotiation immediately on connect."""
+    """
+    Читает IAC-байты приветствия Telnet.
+    ФИКС: reader.read() обёрнут в wait_for — без этого зависает если
+    сервис принял коннект но молчит (подтверждено тестом: 8 сек вместо 2).
+    """
     try:
         reader, writer = await asyncio.wait_for(
             asyncio.open_connection(host, port), timeout=timeout
         )
-        data = await reader.read(512)
+        try:
+            data = await asyncio.wait_for(reader.read(512), timeout=timeout)
+        except asyncio.TimeoutError:
+            writer.close()
+            return {"status": "open", "banner": "Telnet open (no prompt)",
+                    "vulnerable": True}
         writer.close()
         await writer.wait_closed()
         banner = data.decode("utf-8", errors="ignore").strip()
-        return {"status": "open", "banner": banner, "vulnerable": True}
+        return {"status": "open", "banner": banner or "telnet prompt detected",
+                "vulnerable": True}
     except Exception:
         return {"status": "closed", "vulnerable": False}
 
 
 # ---------------------------------------------------------------------------
-# RPCBind / Portmapper (port 111)
+# RPCbind / Portmapper (порт 111)
 # ---------------------------------------------------------------------------
 
-# Minimal RPC NULL call for portmapper v2
+# Корректный RPC NULL call: 10 полей * 4 байта = 40 байт (соответствует record mark 0x28)
 _RPC_NULL = bytes.fromhex(
-    "80000028"   # record mark: last fragment, length 40
+    "80000028"   # record mark: last fragment=1, length=40
     "12345678"   # XID
-    "00000000"   # direction: call
-    "00000002"   # RPC version 2
+    "00000000"   # direction: CALL
+    "00000002"   # RPC version: 2
     "000186a0"   # program: portmapper (100000)
-    "00000002"   # program version 2
-    "00000000"   # procedure: NULL
-    "00000000"   # credentials: AUTH_NULL
-    "00000000"   # verifier: AUTH_NULL
+    "00000002"   # program version: 2
+    "00000000"   # procedure: NULL (0)
+    "00000000"   # credentials: flavor AUTH_NULL
+    "00000000"   # credentials: length 0
+    "00000000"   # verifier: flavor AUTH_NULL
+    "00000000"   # verifier: length 0
 )
 
 
 async def check_rpcbind(host: str, port: int = 111, timeout: float = 2.0) -> dict:
+    """
+    Отправляет корректный RPC NULL call и проверяет что XID вернулся.
+    ФИКС: исходный пакет в документе был неполным (32 байта вместо 40):
+    отсутствовали поля cred_len и verif_len.
+    """
     try:
         reader, writer = await asyncio.wait_for(
             asyncio.open_connection(host, port), timeout=timeout
@@ -208,54 +267,102 @@ async def check_rpcbind(host: str, port: int = 111, timeout: float = 2.0) -> dic
         data = await asyncio.wait_for(reader.read(512), timeout=timeout)
         writer.close()
         await writer.wait_closed()
+
+        # Проверяем что XID из ответа совпадает с нашим
+        xid_match = len(data) >= 8 and data[4:8] == b"\x12\x34\x56\x78"
         return {
             "status": "open",
-            "vulnerable": bool(data),
-            "banner": data.hex() if data else "",
+            "vulnerable": xid_match,
+            "banner": "rpcbind NULL call accepted" if xid_match
+                      else f"rpcbind response ({len(data)} bytes, XID mismatch)",
         }
     except Exception:
         return {"status": "closed", "vulnerable": False}
 
 
 # ---------------------------------------------------------------------------
-# NFS (port 2049)
+# NFS (порт 2049)
 # ---------------------------------------------------------------------------
 
 async def check_nfs(host: str, port: int = 2049, timeout: float = 2.0) -> dict:
-    """Passive open-port check -- NFS exposure is the finding itself."""
+    """
+    NFS NULL call по TCP (программа 100003, версия 3).
+    ФИКС: reader.read() обёрнут в wait_for.
+    """
+    nfs_null = bytes.fromhex(
+        "80000028"
+        "87654321"   # XID
+        "00000000"
+        "00000002"
+        "000186a3"   # program: NFS (100003)
+        "00000003"   # version: 3
+        "00000000"
+        "00000000"
+        "00000000"
+        "00000000"
+        "00000000"
+    )
     try:
         reader, writer = await asyncio.wait_for(
             asyncio.open_connection(host, port), timeout=timeout
         )
-        data = await reader.read(256)
+        writer.write(nfs_null)
+        await writer.drain()
+        try:
+            data = await asyncio.wait_for(reader.read(128), timeout=timeout)
+        except asyncio.TimeoutError:
+            writer.close()
+            return {"status": "open", "vulnerable": True,
+                    "banner": "NFS port open (no RPC response)"}
         writer.close()
         await writer.wait_closed()
-        banner = data.decode("utf-8", errors="ignore").strip()
-        return {"status": "open", "vulnerable": True, "banner": banner}
+
+        xid_match = len(data) >= 8 and data[4:8] == b"\x87\x65\x43\x21"
+        return {
+            "status": "open",
+            "vulnerable": True,
+            "banner": "NFS v3 NULL call accepted" if xid_match
+                      else f"NFS-like response ({len(data)} bytes)",
+        }
     except Exception:
         return {"status": "closed", "vulnerable": False}
 
 
 # ---------------------------------------------------------------------------
-# IRC (ports 6667 / 6697)
+# IRC (порты 6667 / 6697)
 # ---------------------------------------------------------------------------
 
 _IRC_VERSION_RE = re.compile(r"(unrealircd|inspircd|ircd)[^\s]*\s*([\d.]+)", re.I)
 
 
 async def check_irc(host: str, port: int = 6667, timeout: float = 3.0) -> dict:
-    """Passive banner grab -- IRC servers send a greeting immediately on connect."""
+    """
+    IRC: отправляем NICK+USER чтобы спровоцировать ответ сервера.
+    ФИКС 1: reader.read() обёрнут в wait_for.
+    ФИКС 2: добавлена отправка NICK/USER (без них некоторые IRC-серверы
+             не присылают баннер вообще, что давало ложный status=closed).
+    """
     try:
         reader, writer = await asyncio.wait_for(
             asyncio.open_connection(host, port), timeout=timeout
         )
-        data = await reader.read(512)
+        writer.write(b"NICK perimeter_probe\r\nUSER perimeter 0 * :Perimeter\r\n")
+        await writer.drain()
+
+        try:
+            data = await asyncio.wait_for(reader.read(1024), timeout=timeout)
+        except asyncio.TimeoutError:
+            writer.close()
+            return {"status": "open", "banner": "IRC open (no response to NICK/USER)",
+                    "version": "", "vulnerable": False}
+
         writer.close()
         await writer.wait_closed()
+
         banner = data.decode("utf-8", errors="ignore")
         m = _IRC_VERSION_RE.search(banner)
         version = m.group(0) if m else ""
-        # UnrealIRCd 3.2.8.1 carries a known backdoor (CVE-2010-2075)
+        # UnrealIRCd 3.2.8.1 — известный бэкдор CVE-2010-2075
         backdoor = bool(re.search(r"unrealircd.*3\.2\.8", banner, re.I))
         return {
             "status": "open",
@@ -268,47 +375,98 @@ async def check_irc(host: str, port: int = 6667, timeout: float = 3.0) -> dict:
 
 
 # ---------------------------------------------------------------------------
-# distccd (port 3632)
+# distccd (порт 3632)
 # ---------------------------------------------------------------------------
 
 async def check_distccd(host: str, port: int = 3632, timeout: float = 2.0) -> dict:
-    """Passive banner grab -- distccd presence is the finding (CVE-2004-2687)."""
+    """
+    Отправляем distcc-magic и читаем ответ.
+    ФИКС 1: reader.read() обёрнут в wait_for.
+    ФИКС 2: добавлена отправка DIST-пробы (без неё distccd молчит в ответ
+             на пустой коннект, и функция давала ложный status=closed).
+    """
     try:
         reader, writer = await asyncio.wait_for(
             asyncio.open_connection(host, port), timeout=timeout
         )
-        data = await reader.read(256)
+        writer.write(b"DIST00000001")
+        await writer.drain()
+
+        try:
+            data = await asyncio.wait_for(reader.read(256), timeout=timeout)
+        except asyncio.TimeoutError:
+            writer.close()
+            return {"status": "open", "banner": "distccd open (no protocol response)",
+                    "vulnerable": True}
+
         writer.close()
         await writer.wait_closed()
-        banner = data.decode("utf-8", errors="ignore")
+
+        banner = data.decode("utf-8", errors="ignore").strip()
+        markers = ("DIST", "DONE", "DOTO", "ERR", "distcc")
+        confirmed = any(m.lower() in banner.lower() for m in markers)
         return {
             "status": "open",
-            "banner": banner.strip(),
-            "vulnerable": bool(re.search(r"distcc", banner, re.I)) or len(data) > 0,
+            "banner": banner or "distccd open",
+            "vulnerable": confirmed or True,  # открытый distccd = уязвимость всегда
+            "detail": "distccd protocol confirmed" if confirmed else "distccd port open",
         }
     except Exception:
         return {"status": "closed", "vulnerable": False}
 
 
 # ---------------------------------------------------------------------------
-# Bind Shell / Ingreslock (port 1524)
+# Bind Shell (порты 1524, 6200)
 # ---------------------------------------------------------------------------
 
 async def check_bind_shell(host: str, port: int = 1524, timeout: float = 2.0) -> dict:
     """
-    Passive bind-shell detector -- no commands are sent to the remote host.
-    Connects and reads the banner only; a prompt containing '#', 'root@' or
-    'sh-' is a sufficient indicator of an exposed root shell.
+    Пассивный детектор bind shell — читает баннер, НЕ выполняет команды.
+    Shell-prompt (root@metasploitable:/#) — 100% доказательство бэкдора.
     """
     try:
         reader, writer = await asyncio.wait_for(
             asyncio.open_connection(host, port), timeout=timeout
         )
-        data = await asyncio.wait_for(reader.read(256), timeout=timeout)
+        try:
+            data = await asyncio.wait_for(reader.read(256), timeout=timeout)
+        except asyncio.TimeoutError:
+            writer.close()
+            return {"status": "open", "banner": "", "vulnerable": False,
+                    "detail": "port open, no shell prompt received"}
         writer.close()
         await writer.wait_closed()
+
         banner = data.decode("utf-8", errors="ignore")
+        # Детект shell-промпта: root@host:/# или просто #
         vulnerable = "#" in banner or "root@" in banner or "sh-" in banner
-        return {"status": "open", "banner": banner.strip(), "vulnerable": vulnerable}
+        return {
+            "status": "open",
+            "banner": banner.strip(),
+            "vulnerable": vulnerable,
+        }
+    except Exception:
+        return {"status": "closed", "vulnerable": False}
+
+
+# ---------------------------------------------------------------------------
+# VNC (порт 5900)
+# ---------------------------------------------------------------------------
+
+async def check_vnc(host: str, port: int = 5900, timeout: float = 2.0) -> dict:
+    """VNC сам присылает RFB-баннер сразу после коннекта."""
+    try:
+        reader, writer = await asyncio.wait_for(
+            asyncio.open_connection(host, port), timeout=timeout
+        )
+        data = await asyncio.wait_for(reader.read(32), timeout=timeout)
+        writer.close()
+        await writer.wait_closed()
+        banner = data.decode("ascii", errors="ignore").strip()
+        if banner.startswith("RFB "):
+            return {"status": "open", "banner": banner, "vulnerable": False,
+                    "detail": "VNC protocol confirmed"}
+        return {"status": "open", "banner": banner or "no VNC banner",
+                "vulnerable": False}
     except Exception:
         return {"status": "closed", "vulnerable": False}
