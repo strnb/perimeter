@@ -12,7 +12,7 @@ async def main(page: ft.Page):
     page.bgcolor = "#0b0813" 
 
     database.init_db()
-
+    
     def close_disclaimer(e):
         disclaimer_dialog.open = False
         page.update()

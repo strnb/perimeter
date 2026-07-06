@@ -16,6 +16,9 @@ def osint_page(page: ft.Page):
     )
 
     console_output = ft.ListView(expand=True, spacing=5)
+    
+    # ДОБАВЛЕНО: Индикатор прогресса, изначально скрыт
+    progress_indicator = ft.ProgressRing(visible=False, width=20, height=20, stroke_width=3, value=None)
 
     async def start_osint_scan(e):
         domain = domain_input.value.strip() if domain_input.value else ""
@@ -30,6 +33,10 @@ def osint_page(page: ft.Page):
             snack.open = True
             page.update()
             return  # Гарантированный останов выполнения
+            
+        # ИЗМЕНЕНО: Блокируем элементы управления и показываем лоадер
+        start_btn.disabled = True
+        progress_indicator.visible = True
         console_output.controls.clear()
         console_output.controls.append(ft.Text(f"[*] Запуск OSINT-пайплайна для {domain}...", font_family="Courier New", color="#b388ff"))
         page.update()
@@ -57,7 +64,7 @@ def osint_page(page: ft.Page):
                     database.save_osint_result(scan_time, target_domain, registrar, subdomains_count)
                     console_output.controls.append(ft.Text("[+] Результаты успешно сохранены в базу данных.", font_family="Courier New", color="#00e676"))
                 except Exception as db_ex:
-                    console_output.controls.append(ft.Text(f"[-] Ошибка сохранения в БД: {db_ex}", font_family="Courier New", color="#ff1744"))
+                    console_output.controls.append(ft.Text(f"[-] Ошибка保存в БД: {db_ex}", font_family="Courier New", color="#ff1744"))
 
                 console_output.controls.append(ft.Text(f" -> Домен: {result.get('domain', domain)}", font_family="Courier New", color="#ffffff"))
                 console_output.controls.append(ft.Text(f" -> Время сканирования: {result.get('scan_time', '-')}", font_family="Courier New", color="#ffffff"))
@@ -88,6 +95,9 @@ def osint_page(page: ft.Page):
         except Exception as ex:
             console_output.controls.append(ft.Text(f"[-] Критический сбой интерфейса OSINT: {ex}", font_family="Courier New", color="#ff1744"))
         
+        # ДОБАВЛЕНО: Разблокируем UI по завершении процесса
+        start_btn.disabled = False
+        progress_indicator.visible = False
         page.update()
 
     start_btn = ft.ElevatedButton(
@@ -98,7 +108,8 @@ def osint_page(page: ft.Page):
         on_click=start_osint_scan
     )
 
-    search_row = ft.Row(controls=[domain_input, start_btn], spacing=12)
+    # ИЗМЕНЕНО: Добавили progress_indicator в поисковую строку, чтобы лоадер крутился рядом с кнопкой
+    search_row = ft.Row(controls=[domain_input, start_btn, progress_indicator], spacing=12, vertical_alignment=ft.CrossAxisAlignment.CENTER)
 
     results_box = ft.Container(
         content=ft.Column([
