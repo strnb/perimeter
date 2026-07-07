@@ -58,7 +58,7 @@ def run_scan(root: str) -> list[dict]:
     seen = set()
     unique = []
     for f in findings:
-        key = (f.type, f.file)
+        key = (f.type, f.file, f.line)
         if key not in seen:
             seen.add(key)
             unique.append(f)
