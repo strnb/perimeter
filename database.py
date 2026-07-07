@@ -1,13 +1,16 @@
 import sqlite3
 import os
+import logging
 from datetime import datetime
+
+logger = logging.getLogger(__name__)
 
 CURRENT_DIR = os.path.dirname(os.path.abspath(__file__))
 
 BASE_DIR = os.path.abspath(os.path.join(CURRENT_DIR, os.pardir)) if "ui" in CURRENT_DIR or "utils" in CURRENT_DIR or "core" in CURRENT_DIR else CURRENT_DIR
 
 DB_PATH = os.path.join(BASE_DIR, "perimeter.db")
-print(f"[DATABASE] Используется единый путь к БД: {DB_PATH}") # Для отладки в консоли
+logger.debug(f"[DATABASE] DB path: {DB_PATH}")
 
 def init_db():
     """Гарантирует создание всех необходимых таблиц при старте приложения."""

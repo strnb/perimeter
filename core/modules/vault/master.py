@@ -1,11 +1,13 @@
 import hashlib
 from pathlib import Path
+from .salt import get_salt
 
 VAULT_DIR = Path("vault")
 MASTER_FILE = VAULT_DIR / ".master"
 
 def hash_password(password: str) -> str:
-    return hashlib.sha256(password.encode()).hexdigest()
+    salt = get_salt()
+    return hashlib.sha256(salt + password.encode()).hexdigest()
 
 def save_master_hash(password: str):
     VAULT_DIR.mkdir(exist_ok=True)

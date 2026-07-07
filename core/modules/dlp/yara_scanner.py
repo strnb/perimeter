@@ -2,16 +2,29 @@ import yara
 from pathlib import Path
 from .results import Finding
 
+# Пропускать тестовые файлы — там захардкоженные строки это норма
+TEST_PATH_MARKERS = {"test", "tests", "spec", "fixture", "mock", "stub"}
+
 # Путь к папке с правилами — рядом с этим файлом
 RULES_DIR = Path(__file__).parent / "rules"
 
 # Соответствие названия правила YARA → тип Finding
+# Обновлено под актуальные имена правил в passwords.yar
 RULE_TYPE_MAP = {
-    "SSH_Private_Key":    "ssh_key",
-    "AWS_Access_Key":     "aws_key",
-    "Hardcoded_Password": "password",
-    "API_Token":          "api_token",
+    # ssh_keys.yar
+    "SSH_Private_Key":               "ssh_key",
+    # aws_keys.yar
+    "AWS_Access_Key":                "aws_key",
+    # tokens.yar
+    "API_Token":                     "api_token",
+    # passwords.yar — все пять правил
+    "Hardcoded_Password_Assignment": "password",
+    "Hardcoded_Password_Comparison": "password",
+    "Hardcoded_Password_In_Call":    "password",
+    "Hardcoded_Admin_Credentials":   "password",
+    "Hardcoded_Config_Credential":   "password",
 }
+
 
 def _load_rules() -> yara.Rules:
     rule_files = {
@@ -20,7 +33,12 @@ def _load_rules() -> yara.Rules:
     }
     return yara.compile(filepaths=rule_files)
 
+
 def run_yara(file: Path) -> list[Finding]:
+    # Проверяем путь ДО запуска матчинга — не тратим время на тестовые файлы
+    if any(part.lower() in TEST_PATH_MARKERS for part in file.parts):
+        return []
+
     try:
         rules = _load_rules()
         matches = rules.match(str(file))
@@ -35,7 +53,7 @@ def run_yara(file: Path) -> list[Finding]:
             severity="critical",
             file=str(file),
             line=0,  # YARA не возвращает номер строки
-            value=match.rule,
+            value=match.rule,  # имя сработавшего правила — понятнее чем пустое значение
         ))
 
     return findings

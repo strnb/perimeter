@@ -7,7 +7,7 @@ from .command_injection_detector import detect_command_injection
 from .sql_injection_detector import detect_sql_injection
 from .weak_session_detector import detect_weak_session
 
-ALLOWED_EXTENSIONS = {".txt", ".py", ".env", ".json", ".yaml", ".yml", ".cfg", ".ini", ".conf", ".php"}
+ALLOWED_EXTENSIONS = {".txt", ".py", ".env", ".json", ".yaml", ".yml", ".cfg", ".ini", ".conf", ".php", ".cpp", ".js", "mjs"}
 
 EXCLUDED_DIRS = {"venv", ".venv", ".git", "node_modules", "__pycache__", ".idea"}
 

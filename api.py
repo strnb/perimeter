@@ -153,14 +153,31 @@ def scan_dlp(path: str) -> list[dict]:
 
 
 def get_security_index() -> int:
-    """Индекс безопасности от 0 до 100 на основе последнего DLP-скана."""
+    """Индекс безопасности от 0 до 100 на основе DLP-скана и сетевых находок из БД."""
+    import sqlite3
+    from database import DB_PATH
+
+    # Сетевые находки из последнего скана в БД
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        rows = conn.execute("SELECT severity FROM network_details").fetchall()
+        conn.close()
+        network_findings = [{"severity": r[0]} for r in rows if r[0]]
+    except Exception:
+        network_findings = []
+
+    all_findings = _last_scan_findings + network_findings
+
     score = 100
-    for f in _last_scan_findings:
+    for f in all_findings:
         sev = f.get("severity", "").lower()
         if sev == "critical":
-            score -= 10
+            score -= 15
         elif sev == "high":
+            score -= 10
+        elif sev == "medium":
             score -= 5
+
     return max(0, score)
 
 
