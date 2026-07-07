@@ -45,7 +45,7 @@ def dlp_page(page: ft.Page):
                         no_wrap=False,
                     ),
                     expand=COL_FLEX[key],
-                    padding=ft.Padding(8, 10, 8, 10),
+                    padding=ft.Padding.symmetric(vertical=10, horizontal=8),
                 )
             )
         return ft.Container(
@@ -80,6 +80,81 @@ def dlp_page(page: ft.Page):
 
     loading_indicator = ft.ProgressBar(width=400, color="#b388ff", bgcolor="#393053", visible=False)
 
+    # ============================================================
+    # Компактная строка статуса сканирования
+    # ============================================================
+    
+    # Иконка статуса
+    status_icon = ft.Icon(
+        ft.Icons.INFO_OUTLINE, 
+        color="#a7a2be", 
+        size=16,
+        visible=True
+    )
+    
+    # Текст статуса сканирования
+    scan_status_text = ft.Text(
+        "Ожидание сканирования", 
+        size=14, 
+        color="#a7a2be", 
+        weight=ft.FontWeight.W_500
+    )
+
+    # Компактная строка статуса
+    status_row = ft.Row(
+        controls=[
+            status_icon,
+            scan_status_text
+        ],
+        spacing=8,
+        alignment=ft.MainAxisAlignment.START,
+        vertical_alignment=ft.CrossAxisAlignment.CENTER
+    )
+
+    # ============================================================
+    # Функция обновления статуса
+    # ============================================================
+    def update_scan_status(critical, medium, low):
+        """Обновляет текст статуса и иконку"""
+        total = critical + medium + low
+        
+        if total == 0:
+            scan_status_text.value = "Угроз не обнаружено"
+            scan_status_text.color = "#00e676"
+            scan_status_text.weight = ft.FontWeight.W_600
+            status_icon.name = ft.Icons.CHECK_CIRCLE
+            status_icon.color = "#00e676"
+        else:
+            # Формируем детальную строку
+            parts = []
+            if critical > 0:
+                parts.append(f"{critical} крит.")
+            if medium > 0:
+                parts.append(f"{medium} средн.")
+            if low > 0:
+                parts.append(f"{low} низк.")
+            
+            scan_status_text.value = f"Найдено: {', '.join(parts)}"
+            scan_status_text.weight = ft.FontWeight.W_600
+            
+            if critical > 0:
+                scan_status_text.color = "#ff1744"
+                status_icon.name = ft.Icons.DANGEROUS
+                status_icon.color = "#ff1744"
+            elif medium > 0:
+                scan_status_text.color = "#ff9100"
+                status_icon.name = ft.Icons.WARNING_AMBER
+                status_icon.color = "#ff9100"
+            else:
+                scan_status_text.color = "#ffea00"
+                status_icon.name = ft.Icons.INFO_OUTLINE
+                status_icon.color = "#ffea00"
+        
+        page.update()
+
+    # ============================================================
+    # Основная логика сканирования
+    # ============================================================
     async def start_dlp_scan(e):
         path_str = path_input.value.strip() if path_input.value else ""
 
@@ -93,13 +168,13 @@ def dlp_page(page: ft.Page):
             snack.open = True
             page.update()
             return
-        # 2. Безопасность путей (Защита от Path Traversal и сканирования критических зон)
+        
+        # 2. Безопасность путей
         try:
             target_path = Path(path_str).resolve()
             project_root = Path(os.getcwd()).resolve()
             home_dir = Path.home().resolve()
             
-            # Разрешаем сканирование только если путь находится внутри папки проекта или домашней папки юзера
             is_inside_project = project_root in target_path.parents or target_path == project_root
             is_inside_home = home_dir in target_path.parents or target_path == home_dir
             
@@ -118,21 +193,27 @@ def dlp_page(page: ft.Page):
             snack.open = True
             page.update()
             return
-        print(f"[DEBUG] Запуск сканирования: {path_str}")
-        logger.info(f"Запуск DLP сканирования для пути: {path_str}")
+
+        # Блокируем кнопку запуска и активируем индикатор
+        scan_btn.disabled = True
         loading_indicator.visible = True
+        scan_status_text.value = "Сканирование..."
+        scan_status_text.color = "#b388ff"
+        scan_status_text.weight = ft.FontWeight.W_500
+        status_icon.name = ft.Icons.HOURGLASS_EMPTY
+        status_icon.color = "#b388ff"
         table_rows_column.controls.clear()
         page.update()
 
         try:
             raw_findings = await asyncio.to_thread(api.scan_dlp, path_str)
-            print(f"[DEBUG] Найдено результатов: {len(raw_findings)}")
             logger.info(f"Сканирование завершено. Найдено находок: {len(raw_findings)}")
 
+            critical_count = 0
+            medium_count = 0
+            low_count = 0
+
             if raw_findings and "error" not in raw_findings[0]:
-                critical_count = 0
-                medium_count = 0
-                low_count = 0
                 for f in raw_findings:
                     severity = f.get("severity", "LOW").upper()
                     if severity in ("CRITICAL", "HIGH"):
@@ -142,6 +223,7 @@ def dlp_page(page: ft.Page):
                     else:
                         low_count += 1
                 
+                # Сохраняем в БД
                 from datetime import datetime
                 scan_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
                 try:
@@ -150,6 +232,7 @@ def dlp_page(page: ft.Page):
                 except Exception as db_ex:
                     logger.error(f"Ошибка сохранения результатов DLP в БД: {db_ex}")
 
+            # Заполняем таблицу результатов
             if not raw_findings:
                 table_rows_column.controls.append(
                     table_row(["Угрозы не обнаружены", "-", "-", "-", "-"],
@@ -186,13 +269,24 @@ def dlp_page(page: ft.Page):
                                 cells_color=["#ffffff", "#a7a2be", "#ffffff", "#ffeb3b", color]
                             )
                         )
+
+            # Обновляем статус
+            update_scan_status(critical_count, medium_count, low_count)
+
         except Exception as ex:
             logger.error(f"Ошибка при выполнении DLP сканирования: {ex}", exc_info=True)
             table_rows_column.controls.append(
                 table_row(["Критический сбой", str(ex), "-", "-", "FAIL"],
                           cells_color=["#ff1744", "#a7a2be", "#ffffff", "#ffeb3b", "#ff1744"])
             )
+            scan_status_text.value = "Ошибка сканирования"
+            scan_status_text.color = "#ff1744"
+            scan_status_text.weight = ft.FontWeight.W_600
+            status_icon.name = ft.Icons.ERROR
+            status_icon.color = "#ff1744"
         finally:
+            # Разблокируем кнопку управления обратно
+            scan_btn.disabled = False
             loading_indicator.visible = False
             page.update()
 
@@ -204,7 +298,11 @@ def dlp_page(page: ft.Page):
         on_click=start_dlp_scan
     )
 
-    search_row = ft.Row(controls=[path_input, scan_btn], spacing=12)
+    search_row = ft.Row(
+        controls=[path_input, scan_btn], 
+        spacing=12, 
+        vertical_alignment=ft.CrossAxisAlignment.CENTER
+    )
 
     return ft.Column(
         controls=[
@@ -212,6 +310,13 @@ def dlp_page(page: ft.Page):
             ft.Text("Настройка области сканирования DLP-модуля:", size=14, color="#a7a2be"),
             search_row,
             loading_indicator,
+            
+            # Компактная строка статуса
+            ft.Container(
+                content=status_row,
+                padding=ft.Padding.symmetric(horizontal=4, vertical=8)
+            ),
+            
             ft.Divider(color="#251b45"),
             ft.Text("Обнаруженные инциденты и утечки данных:", size=16, weight=ft.FontWeight.W_500, color="#ffffff"),
 
@@ -227,5 +332,5 @@ def dlp_page(page: ft.Page):
             )
         ],
         expand=True,
-        spacing=20
+        spacing=15
     )
