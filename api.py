@@ -26,6 +26,8 @@ logger = logging.getLogger(__name__)
 # Импорты модулей с мягкой деградацией
 # ---------------------------------------------------------------------------
 
+from core.modules.git_audit import run_git_audit
+
 try:
     from core.modules.dlp import run_scan as _dlp_run_scan
     _DLP_AVAILABLE = True
@@ -77,6 +79,54 @@ except ImportError:
     logger.warning("Audit module not available")
 
 
+
+def run_project_audit(
+    path: str,
+    domain: str,
+    wordlist_path: str = "core/subdomains_wordlist.txt",
+    ports=None,
+    host_concurrency: int = 10,
+    enrich: bool = True,
+) -> dict:
+    """
+    Полный аудит проекта.
+
+    Включает:
+
+    - Git Audit
+    - DLP
+    - Network Audit
+    """
+
+    result = {}
+
+    #
+    # Git
+    #
+
+    result["git"] = scan_git(path)
+
+    #
+    # DLP
+    #
+
+    result["dlp"] = scan_dlp(path)
+
+    #
+    # Network
+    #
+
+    result["audit"] = await run_combined_pipeline(
+        run_combined_pipeline(
+            domain=domain,
+            wordlist_path=wordlist_path,
+            ports=ports,
+            host_concurrency=host_concurrency,
+            enrich=enrich,
+        )
+    )
+
+    return result
 # ---------------------------------------------------------------------------
 # База знаний (knowledge_base/vulnerabilities.json)
 # ---------------------------------------------------------------------------
@@ -133,6 +183,47 @@ def enrich_finding(finding: dict) -> dict:
 
     return finding
 
+def generate_recommendations(
+    findings: list[dict],
+) -> list[dict]:
+    """
+    Генерирует список рекомендаций на основе базы знаний.
+
+    Использует поле 'fix' из vulnerabilities.json.
+    """
+
+    recommendations = []
+    seen = set()
+
+    for finding in findings:
+
+        enriched = enrich_finding(finding)
+
+        fix = enriched.get("fix")
+
+        if not fix:
+            continue
+
+        key = (
+            enriched.get("kb_id"),
+            fix,
+        )
+
+        if key in seen:
+            continue
+
+        seen.add(key)
+
+        recommendations.append(
+            {
+                "id": enriched.get("kb_id"),
+                "title": enriched.get("title"),
+                "severity": enriched.get("severity"),
+                "recommendation": fix,
+            }
+        )
+
+    return recommendations
 
 # ---------------------------------------------------------------------------
 # DLP
@@ -150,6 +241,21 @@ def scan_dlp(path: str) -> list[dict]:
     enriched = [enrich_finding(f) for f in raw]
     _last_scan_findings = enriched
     return enriched
+
+def scan_git(path: str) -> dict:
+    """
+    Запускает аудит Git-репозитория.
+    Parameters
+    ----------
+    path : str
+        Путь к проекту.
+    Returns
+    -------
+    dict
+    """
+    from core.modules.git_audit import run_git_audit
+
+    return run_git_audit(path)
 
 
 def get_security_index() -> int:
@@ -364,6 +470,11 @@ async def run_combined_pipeline(
 
             result["findings"] = enriched
 
+            if "findings" in result:
+                result["recommendations"] = generate_recommendations(
+                    result["findings"]
+                )
+
         return result
 
     except Exception as e:
@@ -416,3 +527,4 @@ def save_report(findings: list[dict], reports_dir: str = "reports") -> tuple[str
     json_path.write_text(generate_json_report(findings), encoding="utf-8")
     txt_path.write_text(generate_text_report(findings), encoding="utf-8")
     return str(json_path), str(txt_path)
+    result["git"] = run_git_audit(project_path)
