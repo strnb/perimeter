@@ -246,7 +246,22 @@ def dlp_page(page: ft.Page):
                     )
                 )
             else:
-                for f in raw_findings:
+                severity_order = {
+                    "CRITICAL": 0,
+                    "HIGH": 1,
+                    "MEDIUM": 2,
+                    "LOW": 3
+                }
+
+                sorted_findings = sorted(
+                    raw_findings,
+                    key=lambda f: severity_order.get(
+                        f.get("severity", "LOW").upper(),
+                        99
+                    )
+                )
+
+                for f in sorted_findings:
                     vuln_type = f.get("type") or f.get("vuln_type", "Неизвестно")
                     file_src = f.get("file", "Лог")
                     severity = f.get("severity", "LOW").upper()

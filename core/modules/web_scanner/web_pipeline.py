@@ -1,9 +1,12 @@
+<<<<<<< HEAD
 """
 web_pipeline.py
 
 Главная точка входа Web Scanner.
 """
 
+=======
+>>>>>>> 41688142c96a0f3b46ee870654c386c6889657d3
 import asyncio
 import logging
 from typing import Dict, Iterable, List, Optional
@@ -11,6 +14,7 @@ from typing import Dict, Iterable, List, Optional
 import httpx
 
 from core.modules.web_scanner.registry import CHECKS
+<<<<<<< HEAD
 from core.modules.web_scanner.tech_detector import detect_technologies
 from core.modules.web_scanner.headers_checker import check_headers
 from core.modules.web_scanner.types import WebFinding
@@ -74,6 +78,15 @@ async def run_web_assessment(
     port: int,
     cookies: Optional[Dict[str, str]] = None,
 ) -> dict:
+=======
+from core.modules.web_scanner.types import WebFinding
+
+async def run_web_assessment(
+    target_ip: str,
+    port: int,
+    cookies: [Dict[str, str]] = None,
+):
+>>>>>>> 41688142c96a0f3b46ee870654c386c6889657d3
     """
     Главная точка входа Web Scanner.
     """
