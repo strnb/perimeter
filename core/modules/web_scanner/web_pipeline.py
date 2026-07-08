@@ -1,7 +1,16 @@
+import asyncio
+import logging
+from typing import Dict, Iterable, List, Optional
+
+import httpx
+
+from core.modules.web_scanner.registry import CHECKS
+from core.modules.web_scanner.types import WebFinding
+
 async def run_web_assessment(
     target_ip: str,
     port: int,
-    cookies: Optional[Dict[str, str]] = None,
+    cookies: [Dict[str, str]] = None,
 ):
     """
     Главная точка входа Web Scanner.
