@@ -29,9 +29,9 @@ logger = logging.getLogger(__name__)
 try:
     from core.modules.dlp import run_scan as _dlp_run_scan
     _DLP_AVAILABLE = True
-except ImportError:
+except Exception as e:
     _DLP_AVAILABLE = False
-    logger.warning("DLP module not available")
+    logger.exception("Ошибка импорта DLP: %s", e)
 
 try:
     from core.modules.vault import (
@@ -43,9 +43,9 @@ try:
         is_vault_initialized as _vault_initialized,
     )
     _VAULT_AVAILABLE = True
-except ImportError:
+except Exception as e:
     _VAULT_AVAILABLE = False
-    logger.warning("Vault module not available")
+    logger.exception("Ошибка импорта Vault: %s", e)
 
 try:
     from core.modules.scanner.port_scanner import scan_ports, DEFAULT_PORTS
@@ -56,7 +56,7 @@ except ImportError:
     logger.warning("Scanner module not available")
 
 try:
-    from core.modules.audit.pipeline import run_audit
+    from core.modules.scanner.osint import run_osint
     _OSINT_AVAILABLE = True
 except ImportError:
     _OSINT_AVAILABLE = False
@@ -153,31 +153,14 @@ def scan_dlp(path: str) -> list[dict]:
 
 
 def get_security_index() -> int:
-    """Индекс безопасности от 0 до 100 на основе DLP-скана и сетевых находок из БД."""
-    import sqlite3
-    from database import DB_PATH
-
-    # Сетевые находки из последнего скана в БД
-    try:
-        conn = sqlite3.connect(DB_PATH)
-        rows = conn.execute("SELECT severity FROM network_details").fetchall()
-        conn.close()
-        network_findings = [{"severity": r[0]} for r in rows if r[0]]
-    except Exception:
-        network_findings = []
-
-    all_findings = _last_scan_findings + network_findings
-
+    """Индекс безопасности от 0 до 100 на основе последнего DLP-скана."""
     score = 100
-    for f in all_findings:
+    for f in _last_scan_findings:
         sev = f.get("severity", "").lower()
         if sev == "critical":
-            score -= 15
-        elif sev == "high":
             score -= 10
-        elif sev == "medium":
+        elif sev == "high":
             score -= 5
-
     return max(0, score)
 
 
@@ -346,7 +329,7 @@ async def run_combined_pipeline(
 
     try:
 
-        result = await osint_and_scan(
+        result = await run_audit(
             domain=domain,
             wordlist_path=wordlist_path,
             ports=ports,
