@@ -41,22 +41,22 @@ def _neon_button(label: str, icon, color: str, on_click) -> ft.Container:
     return ft.Container(
         content=ft.Column(
             controls=[
-                ft.Icon(icon, color=color, size=40),
-                ft.Text(label, size=18, weight=ft.FontWeight.BOLD, color="#ffffff"),
+                ft.Icon(icon, color=color, size=42), # Чуть увеличили иконку для баланса
+                ft.Text(label, size=18, weight=ft.FontWeight.BOLD, color="#ffffff", text_align=ft.TextAlign.CENTER),
             ],
-            horizontal_alignment=ft.CrossAxisAlignment.CENTER,
-            spacing=14,
+            alignment=ft.MainAxisAlignment.CENTER,       # Центрируем по вертикали
+            horizontal_alignment=ft.CrossAxisAlignment.CENTER, # Центрируем по горизонтали
+            spacing=15, # Красивый отступ между иконкой и текстом
         ),
         width=260,
-        height=150,
-        alignment=ft.alignment.Alignment(0, 0),
+        height=160, # Слегка увеличили высоту, чтобы тексту снизу было просторно
         bgcolor="#18122b",
         border_radius=18,
         border=ft.Border(
-            top=ft.BorderSide(2, color),
-            bottom=ft.BorderSide(2, color),
-            left=ft.BorderSide(2, color),
-            right=ft.BorderSide(2, color),
+            top=ft.BorderSide(1.5, color),
+            bottom=ft.BorderSide(1.5, color),
+            left=ft.BorderSide(1.5, color),
+            right=ft.BorderSide(1.5, color),
         ),
         on_click=on_click,
         ink=True,
@@ -175,6 +175,36 @@ def home_page(
     def close_web_dialog(e=None):
         web_dialog.open = False
         web_dialog_open[0] = False
+        page.update()
+    
+    def on_clear_history_click(e):
+        def confirm_clear(ae):
+            try:
+                database.clear_all_data()
+                _build_history()
+                page.update()
+            except Exception as ex:
+                logger.error("Ошибка при очистке БД: %s", ex)
+            confirm_dialog.open = False
+            page.update()
+
+        def cancel_clear(ae):
+            confirm_dialog.open = False
+            page.update()
+
+        # Защитное диалоговое окно от случайных нажатий
+        confirm_dialog = ft.AlertDialog(
+            title=ft.Text("Очистить всю историю?", color="#ffffff"),
+            content=ft.Text("Это действие безвозвратно удалит все сохраненные результаты аудитов.", color="#a7a2be", size=13),
+            bgcolor="#18122b",
+            actions=[
+                ft.TextButton("Отмена", style=ft.ButtonStyle(color="#a7a2be"), on_click=cancel_clear),
+                ft.ElevatedButton("Очистить", bgcolor="#ff1744", color="#ffffff", on_click=confirm_clear),
+            ],
+            actions_alignment=ft.MainAxisAlignment.END,
+        )
+        page.overlay.append(confirm_dialog)
+        confirm_dialog.open = True
         page.update()
 
     async def on_web_dialog_run(e):
@@ -460,8 +490,17 @@ def home_page(
             # История
             ft.Container(
                 content=ft.Column([
-                    ft.Text("Последние проверки", size=14,
-                            color="#a7a2be", weight=ft.FontWeight.W_500),
+                    ft.Row([
+                        ft.Text("Последние проверки", size=14,
+                                color="#a7a2be", weight=ft.FontWeight.W_500),
+                        ft.IconButton(
+                            icon=ft.Icons.DELETE_OUTLINE,
+                            icon_color="#ff1744",
+                            icon_size=18,
+                            tooltip="Очистить всю историю",
+                            on_click=on_clear_history_click
+                        )
+                    ], alignment=ft.MainAxisAlignment.SPACE_BETWEEN, vertical_alignment=ft.CrossAxisAlignment.CENTER),
                     ft.Container(height=8),
                     history_column,
                 ], spacing=0),

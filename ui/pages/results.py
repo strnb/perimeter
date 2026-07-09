@@ -228,7 +228,33 @@ def results_page(
 
     else:  # web
         all_findings: list = audit_result.get("findings", [])
+        
+        # --- ИСПРАВЛЕНИЕ: Собираем порты из подсистемы network, если они пришли оттуда ---
+        network_data = audit_result.get("network", [])
+        if isinstance(network_data, list):
+            for port_info in network_data:
+                # Переводим сырые данные портов в понятные для карточек "findings"
+                all_findings.append({
+                    "type": "port",
+                    "title": f"Открытый порт: {port_info.get('port')} ({port_info.get('service', 'unknown')})",
+                    "severity": port_info.get("severity", "LOW"),
+                    "host": target,
+                    "fix": f"Закройте порт, если служба {port_info.get('service')} не используется внешне."
+                })
+                
+        # --- ИСПРАВЛЕНИЕ: Собираем данные OSINT ---
+        osint_data = audit_result.get("osint", {})
+        if isinstance(osint_data, dict) and osint_data.get("subdomains"):
+            subdomains = osint_data.get("subdomains", [])
+            all_findings.append({
+                "type": "osint_subdomain",
+                "title": f"Обнаружено поддоменов: {len(subdomains)}",
+                "severity": "INFO",
+                "file": f"Регистратор: {osint_data.get('registrar', 'Неизвестен')}",
+                "fix": "Проверьте список поддоменов на предмет забытых тестовых стендов."
+            })
 
+        # Стандартная фильтрация по карточкам
         secrets = [
             f for f in all_findings
             if (f.get("type") or f.get("vuln_type") or "").lower()
@@ -244,11 +270,14 @@ def results_page(
             f for f in all_findings
             if "header" in (f.get("type") or f.get("vuln_type") or "").lower()
         ]
+        
+        # В TLS теперь будут попадать как проверки TLS, так и открытые порты (или вынеси порты в отдельную категорию)
         tls_findings = [
             f for f in all_findings
             if "tls" in (f.get("type") or f.get("vuln_type") or "").lower()
             or "ssl" in (f.get("type") or f.get("vuln_type") or "").lower()
             or "cert" in (f.get("type") or f.get("vuln_type") or "").lower()
+            or f.get("type") == "port"  # Показываем порты в этой карточке
         ]
 
     def _card_color(items: list) -> str:
