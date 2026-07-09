@@ -4,3 +4,5 @@ httpx
 flet
 reportlab
 pathlib
+dnspython
+python-whois
