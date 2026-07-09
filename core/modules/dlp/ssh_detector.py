@@ -5,6 +5,17 @@ from .patterns import SSH_PATTERNS
 def detect_ssh(file: Path, lines: list[str]) -> list[Finding]:
     findings = []
 
+    # Если само имя файла — известный ключ (id_rsa без расширения)
+    if file.name in {"id_rsa", "id_ed25519", "id_dsa", "id_ecdsa"}:
+        findings.append(Finding(
+            type="ssh_key",
+            severity="critical",
+            file=str(file),
+            line=0,
+            value=f"Приватный ключ: {file.name}",
+        ))
+        return findings  # дальше не читаем — уже нашли
+
     for line_number, line in enumerate(lines, start=1):
         for pattern in SSH_PATTERNS:
             if pattern in line:
@@ -13,23 +24,7 @@ def detect_ssh(file: Path, lines: list[str]) -> list[Finding]:
                     severity="critical",
                     file=str(file),
                     line=line_number,
-                    kb_id="VULN-005",
                     value=line.strip()[:40],
                 ))
 
     return findings
-
-"""
-python -c "
-from pathlib import Path
-from core.modules.dlp.ssh_detector import detect_ssh
-
-file = Path('tests/fixtures/fake_id_rsa')
-lines = file.read_text().splitlines()
-findings = detect_ssh(file, lines)
-
-print('Найдено:', len(findings))
-for f in findings:
-   print(f.to_dict())
-"
-"""

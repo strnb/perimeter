@@ -23,6 +23,7 @@ RULE_TYPE_MAP = {
     "Hardcoded_Password_In_Call":    "password",
     "Hardcoded_Admin_Credentials":   "password",
     "Hardcoded_Config_Credential":   "password",
+    "gitlab":                        "gitlab"
 }
 
 

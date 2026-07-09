@@ -39,3 +39,13 @@ WEAK_SESSION_PATTERNS = [
     r'=\s*rand\(\s*\)',                          # просто голый rand() без засева
     r'=\s*mt_rand\(\s*\)',                       # mt_rand() без аргументов — максимально предсказуем
 ]
+
+SSH_PATTERNS = [
+    "-----BEGIN RSA PRIVATE KEY-----",
+    "-----BEGIN OPENSSH PRIVATE KEY-----",
+    "-----BEGIN DSA PRIVATE KEY-----",
+    "-----BEGIN EC PRIVATE KEY-----",
+    "-----BEGIN ED25519 PRIVATE KEY-----",    # добавили
+    "-----BEGIN PGP PRIVATE KEY BLOCK-----",  # добавили
+    "-----BEGIN CERTIFICATE-----",            # добавили
+]
