@@ -65,6 +65,17 @@ def init_db():
     )
     """)
     
+    # История запусков (новый UI)
+    cursor.execute("""
+    CREATE TABLE IF NOT EXISTS scan_summaries (
+        id        INTEGER PRIMARY KEY AUTOINCREMENT,
+        scan_time TEXT    NOT NULL,
+        target    TEXT    NOT NULL,
+        mode      TEXT    NOT NULL,
+        score     INTEGER
+    )
+    """)
+
     conn.commit()
     conn.close()
 
@@ -106,6 +117,37 @@ def save_network_result(scan_time, target, open_ports_count, vulnerabilities_cou
     conn.commit()
     conn.close()
 
+def save_scan_summary(scan_time: str, target: str, mode: str, score: int):
+    """Сохраняет краткий итог скана в историю запусков."""
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    cursor.execute(
+        "INSERT INTO scan_summaries (scan_time, target, mode, score) VALUES (?, ?, ?, ?)",
+        (scan_time, target, mode, score),
+    )
+    conn.commit()
+    conn.close()
+
+
+def get_recent_scans(limit: int = 5) -> list:
+    """
+    Возвращает последние N записей из истории.
+    Каждая строка: (id, scan_time, target, mode, score)
+    """
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        cursor = conn.execute(
+            "SELECT id, scan_time, target, mode, score "
+            "FROM scan_summaries ORDER BY id DESC LIMIT ?",
+            (limit,),
+        )
+        rows = cursor.fetchall()
+        conn.close()
+        return rows
+    except Exception:
+        return []
+
+
 def clear_all_data():
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
@@ -113,6 +155,7 @@ def clear_all_data():
     cursor.execute("DROP TABLE IF EXISTS dlp_results")
     cursor.execute("DROP TABLE IF EXISTS network_results")
     cursor.execute("DROP TABLE IF EXISTS network_details")
+    cursor.execute("DROP TABLE IF EXISTS scan_summaries")
     conn.commit()
     conn.close()
     init_db()  # Пересоздаем пустые таблицы

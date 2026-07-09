@@ -1,0 +1,129 @@
+=== PERIMETER Security Report (2026-07-09 13:18) ===
+
+
+[CRITICAL] — 17 finding(s)
+--------------------------------------------------
+  Type   : command_injection
+  File   : C:\Users\syssch\Desktop\perim\tests\fixtures\fake_command_injection.php  (line 3)
+
+  Type   : sql_injection
+  File   : C:\Users\syssch\Desktop\perim\tests\fixtures\fake_sql_injection.php  (line 3)
+
+  Type   : sql_injection
+  File   : C:\Users\syssch\Desktop\perim\tests\fixtures\fake_sql_injection.php  (line 4)
+
+  Type   : aws_key
+  File   : C:\Users\syssch\Desktop\perim\tests\fixtures\fake_tokens.env  (line 1)
+  Title  : API-токен хранится в открытом виде
+  Fix    : Немедленно отозвать обнаруженный токен, выпустить новый и хранить секреты вне исходного кода.
+
+  Type   : aws_secret
+  File   : C:\Users\syssch\Desktop\perim\tests\fixtures\fake_tokens.env  (line 2)
+  Title  : API-токен хранится в открытом виде
+  Fix    : Немедленно отозвать обнаруженный токен, выпустить новый и хранить секреты вне исходного кода.
+
+  Type   : github
+  File   : C:\Users\syssch\Desktop\perim\tests\fixtures\fake_tokens.env  (line 3)
+  Title  : API-токен хранится в открытом виде
+  Fix    : Немедленно отозвать обнаруженный токен, выпустить новый и хранить секреты вне исходного кода.
+
+  Type   : openai
+  File   : C:\Users\syssch\Desktop\perim\tests\fixtures\fake_tokens.env  (line 4)
+  Title  : API-токен хранится в открытом виде
+  Fix    : Немедленно отозвать обнаруженный токен, выпустить новый и хранить секреты вне исходного кода.
+
+  Type   : telegram
+  File   : C:\Users\syssch\Desktop\perim\tests\fixtures\fake_tokens.env  (line 5)
+  Title  : API-токен хранится в открытом виде
+  Fix    : Немедленно отозвать обнаруженный токен, выпустить новый и хранить секреты вне исходного кода.
+
+  Type   : jwt
+  File   : C:\Users\syssch\Desktop\perim\tests\fixtures\fake_tokens.env  (line 6)
+  Title  : API-токен хранится в открытом виде
+  Fix    : Немедленно отозвать обнаруженный токен, выпустить новый и хранить секреты вне исходного кода.
+
+  Type   : ssh_key
+  File   : C:\Users\syssch\Desktop\perim\core\modules\dlp\patterns.py  (line 11)
+  Title  : SSH доступен из внешней сети
+  Fix    : Использовать аутентификацию по ключам, ограничить доступ по IP-адресам и настроить защиту от перебора.
+
+  Type   : ssh_key
+  File   : C:\Users\syssch\Desktop\perim\core\modules\dlp\patterns.py  (line 12)
+  Title  : SSH доступен из внешней сети
+  Fix    : Использовать аутентификацию по ключам, ограничить доступ по IP-адресам и настроить защиту от перебора.
+
+  Type   : ssh_key
+  File   : C:\Users\syssch\Desktop\perim\core\modules\dlp\patterns.py  (line 13)
+  Title  : SSH доступен из внешней сети
+  Fix    : Использовать аутентификацию по ключам, ограничить доступ по IP-адресам и настроить защиту от перебора.
+
+  Type   : ssh_key
+  File   : C:\Users\syssch\Desktop\perim\core\modules\dlp\patterns.py  (line 14)
+  Title  : SSH доступен из внешней сети
+  Fix    : Использовать аутентификацию по ключам, ограничить доступ по IP-адресам и настроить защиту от перебора.
+
+  Type   : ssh_key
+  File   : C:\Users\syssch\Desktop\perim\core\modules\dlp\patterns.py  (line 0)
+  Title  : SSH доступен из внешней сети
+  Fix    : Использовать аутентификацию по ключам, ограничить доступ по IP-адресам и настроить защиту от перебора.
+
+  Type   : api_token
+  File   : C:\Users\syssch\Desktop\perim\core\modules\dlp\patterns.py  (line 0)
+
+  Type   : sql_injection
+  File   : C:\Users\syssch\Desktop\perim\core\modules\dlp\patterns.py  (line 32)
+
+  Type   : password
+  File   : C:\Users\syssch\Desktop\perim\core\modules\web_scanner\brute_force.py  (line 0)
+  Title  : Пароль хранится в открытом виде
+  Fix    : Перенести секреты в переменные окружения или систему управления секретами и заменить скомпрометированные пароли.
+
+
+[HIGH] — 3 finding(s)
+--------------------------------------------------
+  Type   : password
+  File   : C:\Users\syssch\Desktop\perim\tests\fixtures\fake_passwords.env  (line 1)
+  Title  : Пароль хранится в открытом виде
+  Fix    : Перенести секреты в переменные окружения или систему управления секретами и заменить скомпрометированные пароли.
+
+  Type   : weak_session_id
+  File   : C:\Users\syssch\Desktop\perim\tests\fixtures\fake_weak_session.php  (line 3)
+
+  Type   : weak_session_id
+  File   : C:\Users\syssch\Desktop\perim\tests\fixtures\fake_weak_session.php  (line 5)
+
+
+[MEDIUM] — 6 finding(s)
+--------------------------------------------------
+  Type   : password
+  File   : C:\Users\syssch\Desktop\perim\tests\fixtures\fake_passwords.env  (line 2)
+  Title  : Пароль хранится в открытом виде
+  Fix    : Перенести секреты в переменные окружения или систему управления секретами и заменить скомпрометированные пароли.
+
+  Type   : password
+  File   : C:\Users\syssch\Desktop\perim\tests\fixtures\fake_passwords.env  (line 3)
+  Title  : Пароль хранится в открытом виде
+  Fix    : Перенести секреты в переменные окружения или систему управления секретами и заменить скомпрометированные пароли.
+
+  Type   : password
+  File   : C:\Users\syssch\Desktop\perim\tests\fixtures\fake_tokens.env  (line 3)
+  Title  : Пароль хранится в открытом виде
+  Fix    : Перенести секреты в переменные окружения или систему управления секретами и заменить скомпрометированные пароли.
+
+  Type   : password
+  File   : C:\Users\syssch\Desktop\perim\tests\fixtures\fake_tokens.env  (line 4)
+  Title  : Пароль хранится в открытом виде
+  Fix    : Перенести секреты в переменные окружения или систему управления секретами и заменить скомпрометированные пароли.
+
+  Type   : password
+  File   : C:\Users\syssch\Desktop\perim\tests\fixtures\fake_tokens.env  (line 5)
+  Title  : Пароль хранится в открытом виде
+  Fix    : Перенести секреты в переменные окружения или систему управления секретами и заменить скомпрометированные пароли.
+
+  Type   : password
+  File   : C:\Users\syssch\Desktop\perim\tests\fixtures\fake_tokens.env  (line 6)
+  Title  : Пароль хранится в открытом виде
+  Fix    : Перенести секреты в переменные окружения или систему управления секретами и заменить скомпрометированные пароли.
+
+Total findings: 26
+Security Index: 0/100

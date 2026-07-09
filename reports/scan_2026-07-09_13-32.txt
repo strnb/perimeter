@@ -1,0 +1,12 @@
+=== PERIMETER Security Report (2026-07-09 13:32) ===
+
+
+[CRITICAL] — 1 finding(s)
+--------------------------------------------------
+  Type   : password
+  File   : C:\Users\syssch\Desktop\GradientProject-main\server\mytcpserver.cpp  (line 0)
+  Title  : Пароль хранится в открытом виде
+  Fix    : Перенести секреты в переменные окружения или систему управления секретами и заменить скомпрометированные пароли.
+
+Total findings: 1
+Security Index: 90/100

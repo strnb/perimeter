@@ -80,7 +80,7 @@ except ImportError:
 
 
 
-def run_project_audit(
+async def run_project_audit(
     path: str,
     domain: str,
     wordlist_path: str = "core/subdomains_wordlist.txt",
@@ -113,17 +113,15 @@ def run_project_audit(
     result["dlp"] = scan_dlp(path)
 
     #
-    # Network
+    # Network + OSINT pipeline
     #
 
     result["audit"] = await run_combined_pipeline(
-        run_combined_pipeline(
-            domain=domain,
-            wordlist_path=wordlist_path,
-            ports=ports,
-            host_concurrency=host_concurrency,
-            enrich=enrich,
-        )
+        domain=domain,
+        wordlist_path=wordlist_path,
+        ports=ports,
+        host_concurrency=host_concurrency,
+        enrich=enrich,
     )
 
     return result
@@ -527,4 +525,3 @@ def save_report(findings: list[dict], reports_dir: str = "reports") -> tuple[str
     json_path.write_text(generate_json_report(findings), encoding="utf-8")
     txt_path.write_text(generate_text_report(findings), encoding="utf-8")
     return str(json_path), str(txt_path)
-    result["git"] = run_git_audit(project_path)
