@@ -6,12 +6,16 @@ from .yara_scanner import run_yara
 from .command_injection_detector import detect_command_injection
 from .sql_injection_detector import detect_sql_injection
 from .weak_session_detector import detect_weak_session
+from .dockerfile_detector import DOCKERFILE_NAMES
+from .dockerfile_detector import detect_dockerfile
 
-ALLOWED_EXTENSIONS = {".txt", ".py", ".env", ".json", ".yaml", ".yml", ".cfg", ".ini", ".conf", ".php", ".cpp", ".js", "mjs"}
+ALLOWED_EXTENSIONS = {".txt", ".py", ".env", ".json", ".yaml", ".yml", ".cfg", ".ini", ".conf", ".php", ".cpp", ".js", "mjs", ".pem", ".key", ".ppk", ".dockerfile"}
 
 EXCLUDED_DIRS = {"venv", ".venv", ".git", "node_modules", "__pycache__", ".idea"}
 
 MAX_FILE_SIZE = 1 * 1024 * 1024  # 1 МБ в байтах
+
+KEY_FILENAMES = {"id_rsa", "id_ed25519", "id_dsa", "id_ecdsa"}
 
 def walk_files(root: str) -> list[Path]:
     result = []
@@ -20,19 +24,22 @@ def walk_files(root: str) -> list[Path]:
         # Пропустить если это папка, а не файл
         if not path.is_file():
             continue
-
         # Пропустить если файл лежит внутри запрещённой папки
         if any(part in EXCLUDED_DIRS for part in path.parts):
             continue
-
         # Пропустить если расширение не в списке разрешённых
         if path.suffix not in ALLOWED_EXTENSIONS:
             continue
-
         # Пропустить если файл больше 1 МБ
         if path.stat().st_size > MAX_FILE_SIZE:
             continue
-
+        # Файлы с опасными именами — включать вне зависимости от расширения
+        if path.name in KEY_FILENAMES or path.name in DOCKERFILE_NAMES:
+            result.append(path)
+            continue
+        if path.suffix not in ALLOWED_EXTENSIONS:
+            continue
+        
         result.append(path)
 
     return result
@@ -53,6 +60,7 @@ def run_scan(root: str) -> list[dict]:
         findings += detect_command_injection(file, lines)
         findings += detect_sql_injection(file, lines)
         findings += detect_weak_session(file, lines)
+        findings += detect_dockerfile(file, lines)
 
     # Дедупликация — убрать записи с одинаковым типом и файлом
     seen = set()
