@@ -348,12 +348,14 @@ def home_page(
 
             # Сохраняем в историю
             try:
-                database.save_scan_summary(
+                summary_id = database.save_scan_summary(
                     scan_time=result["scan_time"],
                     target=path,
                     mode="project",
                     score=score,
                 )
+                database.save_scan_result(summary_id, result)
+                result["id"] = summary_id
             except Exception as db_ex:
                 logger.warning("Не удалось сохранить историю: %s", db_ex)
 
@@ -495,12 +497,17 @@ def home_page(
             result["score"] = score
 
             try:
-                database.save_scan_summary(
+                # 1. Получаем ID из БД
+                summary_id = database.save_scan_summary(
                     scan_time=result["scan_time"],
                     target=domain,
                     mode="web",
                     score=score,
                 )
+                # 2. Сохраняем полный JSON по этому ID
+                database.save_scan_result(summary_id, result)
+                # 3. Добавляем ID в словарь результатов, чтобы UI мог его прочитать
+                result["id"] = summary_id
             except Exception as db_ex:
                 logger.warning("Не удалось сохранить историю: %s", db_ex)
 

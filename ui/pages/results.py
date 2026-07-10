@@ -7,6 +7,9 @@ ui/pages/results.py — Экран результатов аудита.
 • Кнопка «Сохранить отчёт»
 • Кнопка «← Назад»
 """
+import tkinter as tk
+from tkinter import filedialog
+from core.modules.report_generator_utils.report_generator import generate_pdf_report
 
 import logging
 from datetime import datetime
@@ -530,15 +533,36 @@ def results_page(
     # ── Сохранение отчёта ─────────────────────────────────────────────────────
     save_status = ft.Text("", size=12, color="#a7a2be")
 
+    # Изменения внутри ui/pages/results.py -> функция results_page() -> метод on_save()
     def on_save(e):
         try:
-            _ports = ports_findings if mode == "web" else []
-            all_f = secrets + configs + _ports + headers_findings + tls_findings
-            json_p, txt_p = api.save_report(all_f)
-            save_status.value = f"✓ Отчёт сохранён: {txt_p}"
+            root = tk.Tk()
+            root.withdraw()  # Скрываем базовое окно tk
+            root.attributes("-topmost", True)  # Поверх остальных окон Flet
+
+            filename = filedialog.asksaveasfilename(
+                title="Сохранить PDF отчёт",
+                defaultextension=".pdf",
+                filetypes=[("PDF", "*.pdf")],
+                initialfile=f"Perimeter_Report_{datetime.now().strftime('%Y%m%d_%H%M%S')}.pdf",
+            )
+
+            root.destroy()  # Закрываем контекст tk
+
+            if not filename:
+                return
+
+            # ИСПРАВЛЕНО: Достаем ID текущего сканирования из словаря результатов
+            current_scan_id = audit_result.get("id")
+
+            # Вызываем генератор PDF, передавая имя файла и ID скана для разбора JSON
+            generate_pdf_report(filename, scan_id=current_scan_id)
+
+            save_status.value = f"✓ PDF сохранён:\n{Path(filename).name}"
             save_status.color = "#00e676"
         except Exception as ex:
-            save_status.value = f"Ошибка: {ex}"
+            logger.exception(ex)
+            save_status.value = f"Ошибка: {str(ex)}"
             save_status.color = "#ff1744"
         page.update()
 
