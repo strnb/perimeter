@@ -209,7 +209,8 @@ def home_page(
 
     async def on_web_dialog_run(e):
         domain = (domain_field.value or "").strip()
-        if not domain or "." not in domain:
+        domain_lower = domain.lower()
+        if not domain or ("." not in domain and domain_lower != "localhost"):
             domain_field.error_text = "Введите корректный домен (например, google.com)"
             page.update()
             return
@@ -369,25 +370,130 @@ def home_page(
         btn_project.ink = True
 
     async def _run_web(domain: str):
-        set_status(f"Запускаем OSINT для {domain}...", busy=True)
+        is_local = domain.lower() in ("localhost", "127.0.0.1", "::1") \
+                   or domain.startswith("192.168.") \
+                   or domain.startswith("10.")
+        scan_target = "127.0.0.1" if domain.lower() in ("localhost", "::1") else domain
+
+        result: dict = {
+            "mode": "web",
+            "target": domain,
+            "scan_time": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            "findings": [],
+            "network": [],
+            "osint": {},
+            "web": [],
+        }
 
         try:
-            set_status("Анализируем инфраструктуру...", busy=True)
-            result = await api.run_combined_pipeline(domain)
+            # ── 1. OSINT ────────────────────────────────────────────────────
+            if not is_local:
+                set_status(f"OSINT: собираем данные о {domain}...", busy=True)
+                try:
+                    osint = await api.run_osint_report(
+                        domain,
+                        wordlist_path="core/subdomains_wordlist.txt",
+                    )
+                    result["osint"] = osint
 
-            if "error" in result:
-                raise RuntimeError(result["error"])
+                    if osint and "error" not in osint:
+                        # Субдомены → findings
+                        for sub in osint.get("subdomains", []):
+                            sub_name = sub.get("subdomain", sub) if isinstance(sub, dict) else sub
+                            sub_ip   = sub.get("ip", "") if isinstance(sub, dict) else ""
+                            result["findings"].append({
+                                "type":     "osint_subdomain",
+                                "title":    f"Поддомен: {sub_name}" + (f" ({sub_ip})" if sub_ip else ""),
+                                "severity": "INFO",
+                                "host":     sub_name,
+                                "fix":      "Проверьте, не является ли поддомен забытым стендом.",
+                            })
 
-            result["mode"] = "web"
-            result["target"] = domain
-            result["scan_time"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                        # WHOIS → findings если есть интересные данные
+                        whois = osint.get("whois", {})
+                        if whois:
+                            result["findings"].append({
+                                "type":     "osint_whois",
+                                "title":    f"WHOIS: регистратор {whois.get('registrar') or whois.get('registrar_name', 'неизвестен')}",
+                                "severity": "INFO",
+                                "host":     domain,
+                                "fix":      "Убедитесь, что контактные данные WHOIS не раскрывают лишнего.",
+                            })
 
-            # Score
-            findings = result.get("findings", [])
-            score = _calc_web_score(findings)
+                        # DNS → findings
+                        for rtype, vals in osint.get("dns", {}).items():
+                            if not vals:
+                                continue
+                            v_str = ", ".join(vals) if isinstance(vals, list) else str(vals)
+                            result["findings"].append({
+                                "type":     "osint_dns",
+                                "title":    f"DNS {rtype}: {v_str}",
+                                "severity": "INFO",
+                                "host":     domain,
+                            })
+
+                except Exception as e_osint:
+                    logger.warning("OSINT error: %s", e_osint)
+                    result["osint"] = {"error": str(e_osint)}
+            else:
+                set_status(f"OSINT пропущен для локального адреса", busy=True)
+
+            # ── 2. Сканирование портов ───────────────────────────────────────
+            set_status(f"Сканируем порты {scan_target}...", busy=True)
+            try:
+                network_findings = await api.scan_network(scan_target)
+
+                if network_findings and "error" not in (network_findings[0] if network_findings else {}):
+                    result["network"] = network_findings
+
+                    for f in network_findings:
+                        port_vulns = f.get("findings", [])
+                        sev = port_vulns[0].get("severity", "LOW") if port_vulns else "LOW"
+
+                        # Открытый порт
+                        result["findings"].append({
+                            "type":    "open_port",
+                            "title":   f"Открытый порт {f['port']} ({f.get('service', 'unknown')})",
+                            "severity": sev,
+                            "host":    f.get("host", scan_target),
+                            "port":    f["port"],
+                            "banner":  f.get("banner", ""),
+                            "fix":     f"Закройте порт {f['port']}, если сервис не должен быть доступен снаружи.",
+                        })
+
+                        # Уязвимости порта
+                        for vuln in port_vulns:
+                            result["findings"].append({
+                                **vuln,
+                                "host": f.get("host", scan_target),
+                                "port": f["port"],
+                            })
+
+            except Exception as e_net:
+                logger.warning("Network scan error: %s", e_net)
+                result["findings"].append({
+                    "type":     "scanner_error",
+                    "title":    f"Ошибка сканирования портов: {e_net}",
+                    "severity": "INFO",
+                    "host":     scan_target,
+                })
+
+            # ── 3. Web Scanner (заголовки, TLS) ─────────────────────────────
+            set_status(f"Проверяем HTTP/TLS {domain}...", busy=True)
+            for web_port in ([80, 443] if not is_local else [80]):
+                try:
+                    web_findings = await api.scan_web(domain, port=web_port)
+                    if web_findings and "error" not in (web_findings[0] if web_findings else {}):
+                        result["web"].extend(web_findings)
+                        result["findings"].extend(web_findings)
+                        break  # Нашли — хватит
+                except Exception:
+                    continue
+
+            # ── Score и сохранение ───────────────────────────────────────────
+            score = _calc_web_score(result["findings"])
             result["score"] = score
 
-            # Сохраняем в историю
             try:
                 database.save_scan_summary(
                     scan_time=result["scan_time"],
@@ -449,7 +555,7 @@ def home_page(
                     text_align=ft.TextAlign.CENTER,
                 ),
                 ft.Text(
-                    "Комплекс безопасности корпоративного уровня",
+                    "Комплекс безопасности",
                     size=14,
                     color="#393053",
                     text_align=ft.TextAlign.CENTER,

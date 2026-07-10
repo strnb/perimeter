@@ -184,6 +184,139 @@ def _result_card(
 
 
 # ──────────────────────────────────────────────────────────────────────────────
+# Детальные панели (OSINT + Network) — стиль «консоли» как в старых страницах
+# ──────────────────────────────────────────────────────────────────────────────
+
+def _console_line(text: str, color: str = "#a7a2be") -> ft.Text:
+    return ft.Text(text, font_family="Courier New", size=12, color=color, selectable=True)
+
+
+def _build_osint_detail(osint: dict, domain: str) -> list:
+    """Возвращает список Flet-контролов с детальным OSINT-выводом."""
+    if not osint or "error" in osint:
+        return []
+
+    lines = []
+
+    # WHOIS
+    whois = osint.get("whois", {})
+    if whois:
+        lines.append(_console_line(" -> Данные WHOIS:", "#b388ff"))
+        for k, v in whois.items():
+            lines.append(_console_line(f"    | {k}: {v}"))
+
+    # DNS
+    dns = osint.get("dns", {})
+    if dns:
+        lines.append(_console_line(" -> DNS записи:", "#b388ff"))
+        for rtype, vals in dns.items():
+            v_str = ", ".join(vals) if isinstance(vals, list) else str(vals)
+            lines.append(_console_line(f"    | {rtype}: {v_str}"))
+
+    # Субдомены
+    subdomains = osint.get("subdomains", [])
+    lines.append(_console_line(f" -> Найдено поддоменов: {len(subdomains)}", "#b388ff"))
+    for sub in subdomains[:50]:
+        if isinstance(sub, dict):
+            sub_name = sub.get("subdomain", "?")
+            sub_ip   = sub.get("ip", "")
+            lines.append(_console_line(
+                f"    | {sub_name}" + (f" -> IP: {sub_ip}" if sub_ip else ""),
+                "#ffeb3b",
+            ))
+        else:
+            lines.append(_console_line(f"    | {sub}", "#ffeb3b"))
+    if len(subdomains) > 50:
+        lines.append(_console_line(f"    | ... ещё {len(subdomains) - 50} поддоменов", "#393053"))
+
+    if not lines:
+        return []
+
+    return [
+        ft.Container(height=8),
+        ft.Text("Разведка (OSINT)", size=14, color="#a7a2be", weight=ft.FontWeight.W_500),
+        ft.Container(height=6),
+        ft.Container(
+            content=ft.Container(
+                content=ft.Column(
+                    controls=[
+                        _console_line(f"[+] Домен: {osint.get('domain', domain)}", "#00e676"),
+                        _console_line(f" -> Время: {osint.get('scan_time', '—')}"),
+                        *lines,
+                    ],
+                    spacing=3,
+                    scroll=ft.ScrollMode.AUTO,
+                ),
+                height=300,
+                padding=ft.Padding(left=14, top=12, right=14, bottom=12),
+            ),
+            bgcolor="#0b0813",
+            border_radius=10,
+            border=ft.Border(
+                top=ft.BorderSide(1, "#251b45"),
+                bottom=ft.BorderSide(1, "#251b45"),
+                left=ft.BorderSide(1, "#251b45"),
+                right=ft.BorderSide(1, "#251b45"),
+            ),
+        ),
+    ]
+
+
+def _build_network_detail(network: list) -> list:
+    """Возвращает список Flet-контролов с детальным выводом портов и уязвимостей."""
+    if not network:
+        return []
+
+    lines = []
+    for f in network:
+        port    = f.get("port", "?")
+        service = f.get("service", "unknown")
+        banner  = f.get("banner", "")
+        vulns   = f.get("findings", [])
+
+        lines.append(_console_line(
+            f"[+] Порт {port} ({service})" + (f"  баннер: {banner}" if banner else ""),
+            "#00e676",
+        ))
+        if vulns:
+            for v in vulns:
+                sev   = v.get("severity", "?")
+                title = v.get("title", "Уязвимость")
+                rec   = v.get("recommendation") or v.get("fix", "")
+                sev_color = _sev_color(sev)
+                lines.append(_console_line(f"    ↳ [!] {title} [{sev}]", sev_color))
+                if rec:
+                    lines.append(_console_line(f"        → {rec}", "#a7a2be"))
+        else:
+            lines.append(_console_line("    ↳ Известных уязвимостей не обнаружено", "#393053"))
+
+    return [
+        ft.Container(height=8),
+        ft.Text("Детали сканирования портов", size=14, color="#a7a2be", weight=ft.FontWeight.W_500),
+        ft.Container(height=6),
+        ft.Container(
+            content=ft.Container(
+                content=ft.Column(
+                    controls=lines,
+                    spacing=3,
+                    scroll=ft.ScrollMode.AUTO,
+                ),
+                height=300,
+                padding=ft.Padding(left=14, top=12, right=14, bottom=12),
+            ),
+            bgcolor="#0b0813",
+            border_radius=10,
+            border=ft.Border(
+                top=ft.BorderSide(1, "#251b45"),
+                bottom=ft.BorderSide(1, "#251b45"),
+                left=ft.BorderSide(1, "#251b45"),
+                right=ft.BorderSide(1, "#251b45"),
+            ),
+        ),
+    ]
+
+
+# ──────────────────────────────────────────────────────────────────────────────
 # Главная функция страницы
 # ──────────────────────────────────────────────────────────────────────────────
 
@@ -216,6 +349,7 @@ def results_page(
 
         headers_findings: list = []
         tls_findings: list = []
+        ports_findings: list = []
 
         # Git-находки как доп. секреты
         git_findings = git_data.get("findings", []) if isinstance(git_data, dict) else []
@@ -227,34 +361,34 @@ def results_page(
         ]
 
     else:  # web
-        all_findings: list = audit_result.get("findings", [])
-        
-        # --- ИСПРАВЛЕНИЕ: Собираем порты из подсистемы network, если они пришли оттуда ---
+        all_findings: list = list(audit_result.get("findings", []))
+
+        # Порты из network[], если pipeline вернул их отдельно (fallback-режим)
         network_data = audit_result.get("network", [])
+        existing_port_keys = {
+            (f.get("host"), f.get("port"))
+            for f in all_findings
+            if f.get("type") == "open_port"
+        }
         if isinstance(network_data, list):
             for port_info in network_data:
-                # Переводим сырые данные портов в понятные для карточек "findings"
-                all_findings.append({
-                    "type": "port",
-                    "title": f"Открытый порт: {port_info.get('port')} ({port_info.get('service', 'unknown')})",
-                    "severity": port_info.get("severity", "LOW"),
-                    "host": target,
-                    "fix": f"Закройте порт, если служба {port_info.get('service')} не используется внешне."
-                })
-                
-        # --- ИСПРАВЛЕНИЕ: Собираем данные OSINT ---
-        osint_data = audit_result.get("osint", {})
-        if isinstance(osint_data, dict) and osint_data.get("subdomains"):
-            subdomains = osint_data.get("subdomains", [])
-            all_findings.append({
-                "type": "osint_subdomain",
-                "title": f"Обнаружено поддоменов: {len(subdomains)}",
-                "severity": "INFO",
-                "file": f"Регистратор: {osint_data.get('registrar', 'Неизвестен')}",
-                "fix": "Проверьте список поддоменов на предмет забытых тестовых стендов."
-            })
+                key = (port_info.get("host"), port_info.get("port"))
+                if key not in existing_port_keys:
+                    all_findings.append({
+                        "type": "open_port",
+                        "title": f"Открытый порт {port_info.get('port')} ({port_info.get('service', 'unknown')})",
+                        "severity": "LOW",
+                        "host": port_info.get("host", target),
+                        "port": port_info.get("port"),
+                        "banner": port_info.get("banner", ""),
+                        "fix": (
+                            f"Закройте порт {port_info.get('port')}, "
+                            f"если сервис {port_info.get('service', 'unknown')} не нужен снаружи."
+                        ),
+                    })
+                    existing_port_keys.add(key)
 
-        # Стандартная фильтрация по карточкам
+        # Фильтрация по категориям
         secrets = [
             f for f in all_findings
             if (f.get("type") or f.get("vuln_type") or "").lower()
@@ -270,14 +404,17 @@ def results_page(
             f for f in all_findings
             if "header" in (f.get("type") or f.get("vuln_type") or "").lower()
         ]
-        
-        # В TLS теперь будут попадать как проверки TLS, так и открытые порты (или вынеси порты в отдельную категорию)
         tls_findings = [
             f for f in all_findings
             if "tls" in (f.get("type") or f.get("vuln_type") or "").lower()
             or "ssl" in (f.get("type") or f.get("vuln_type") or "").lower()
             or "cert" in (f.get("type") or f.get("vuln_type") or "").lower()
-            or f.get("type") == "port"  # Показываем порты в этой карточке
+        ]
+        # Открытые порты — отдельная категория
+        ports_findings = [
+            f for f in all_findings
+            if f.get("type") in ("open_port", "port")
+            or f.get("type") == "vulnerability"
         ]
 
     def _card_color(items: list) -> str:
@@ -338,6 +475,7 @@ def results_page(
     ]
     if mode == "web":
         summary_items += [
+            _summary_row(ft.Icons.ROUTER, "Открытые порты", ports_findings),
             _summary_row(ft.Icons.HTTP, "Headers", headers_findings),
             _summary_row(ft.Icons.LOCK, "TLS", tls_findings),
         ]
@@ -364,6 +502,14 @@ def results_page(
     if mode == "web":
         cards += [
             _result_card(
+                icon=ft.Icons.ROUTER,
+                label="Открытые порты",
+                count=len(ports_findings),
+                color=_card_color(ports_findings),
+                findings=ports_findings,
+                page=page,
+            ),
+            _result_card(
                 icon=ft.Icons.HTTP,
                 label="Headers",
                 count=len(headers_findings),
@@ -386,7 +532,8 @@ def results_page(
 
     def on_save(e):
         try:
-            all_f = secrets + configs + headers_findings + tls_findings
+            _ports = ports_findings if mode == "web" else []
+            all_f = secrets + configs + _ports + headers_findings + tls_findings
             json_p, txt_p = api.save_report(all_f)
             save_status.value = f"✓ Отчёт сохранён: {txt_p}"
             save_status.color = "#00e676"
@@ -467,6 +614,14 @@ def results_page(
                         ],
                         spacing=12,
                     ),
+
+                    ft.Container(height=20),
+
+                    # ── Детали OSINT (только web) ─────────────────────────
+                    *(_build_osint_detail(audit_result.get("osint", {}), target) if mode == "web" else []),
+
+                    # ── Детали портов (только web) ────────────────────────
+                    *(_build_network_detail(audit_result.get("network", [])) if mode == "web" else []),
 
                     ft.Container(height=20),
 
