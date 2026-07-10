@@ -6,8 +6,10 @@ from .yara_scanner import run_yara
 from .command_injection_detector import detect_command_injection
 from .sql_injection_detector import detect_sql_injection
 from .weak_session_detector import detect_weak_session
+from .dockerfile_detector import DOCKERFILE_NAMES
+from .dockerfile_detector import detect_dockerfile
 
-ALLOWED_EXTENSIONS = {".txt", ".py", ".env", ".json", ".yaml", ".yml", ".cfg", ".ini", ".conf", ".php", ".cpp", ".js", "mjs", ".pem", ".key", ".ppk"}
+ALLOWED_EXTENSIONS = {".txt", ".py", ".env", ".json", ".yaml", ".yml", ".cfg", ".ini", ".conf", ".php", ".cpp", ".js", "mjs", ".pem", ".key", ".ppk", ".dockerfile"}
 
 EXCLUDED_DIRS = {"venv", ".venv", ".git", "node_modules", "__pycache__", ".idea"}
 
@@ -32,7 +34,7 @@ def walk_files(root: str) -> list[Path]:
         if path.stat().st_size > MAX_FILE_SIZE:
             continue
         # Файлы с опасными именами — включать вне зависимости от расширения
-        if path.name in KEY_FILENAMES:
+        if path.name in KEY_FILENAMES or path.name in DOCKERFILE_NAMES:
             result.append(path)
             continue
         if path.suffix not in ALLOWED_EXTENSIONS:
@@ -58,6 +60,7 @@ def run_scan(root: str) -> list[dict]:
         findings += detect_command_injection(file, lines)
         findings += detect_sql_injection(file, lines)
         findings += detect_weak_session(file, lines)
+        findings += detect_dockerfile(file, lines)
 
     # Дедупликация — убрать записи с одинаковым типом и файлом
     seen = set()

@@ -88,3 +88,7 @@ async def main(page: ft.Page):
 
 
 ft.app(target=main)
+
+"""
+Get-ChildItem -Path . -Directory -Recurse -Filter "__pycache__" | Remove-Item -Recurse -Force
+"""

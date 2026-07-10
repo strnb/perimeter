@@ -1,0 +1,17 @@
+FROM python:3.11
+
+# Это нормальная строка — не должна срабатывать
+WORKDIR /app
+
+# Небезопасно: root
+USER root
+
+# Небезопасно: ADD вместо COPY
+ADD requirements.txt .
+
+# Небезопасно: секрет в ENV
+ENV DB_PASSWORD=supersecret123
+
+# Это безопасно
+COPY . .
+RUN pip install -r requirements.txt
