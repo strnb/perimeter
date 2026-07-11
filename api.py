@@ -227,45 +227,119 @@ def generate_recommendations(
 # DLP
 # ---------------------------------------------------------------------------
 
-_last_scan_findings: list[dict] = []
+# api.py
+
+_last_scan_findings: dict[str, list[dict]] = {
+    "dlp": [],
+    "network": [],
+    "web": [],
+}
+
+
+def _all_findings() -> list[dict]:
+    """Плоский список всех находок из всех категорий сканирования."""
+    return [
+        f
+        for findings in _last_scan_findings.values()
+        for f in findings
+    ]
+
 
 def scan_dlp(path: str) -> list[dict]:
-    """Запускает DLP-сканирование папки path."""
     if not _DLP_AVAILABLE:
         return [{"error": "DLP module not available"}]
-
-    global _last_scan_findings
     raw = _dlp_run_scan(path)
     enriched = [enrich_finding(f) for f in raw]
-    _last_scan_findings = enriched
+    _last_scan_findings["dlp"] = enriched
+    logger.info("[Index] scan_dlp: сохранено %d находок", len(enriched))
     return enriched
 
-def scan_git(path: str) -> dict:
-    """
-    Запускает аудит Git-репозитория.
-    Parameters
-    ----------
-    path : str
-        Путь к проекту.
-    Returns
-    -------
-    dict
-    """
-    from core.modules.git_audit import run_git_audit
 
-    return run_git_audit(path)
+async def scan_network(target: str, ports: Optional[list[int]] = None) -> list[dict]:
+    if not _SCANNER_AVAILABLE:
+        return [{"error": "Scanner module not available"}]
 
+    scan_results = await scan_ports(target, ports=ports)
+    vuln_findings = match_vulnerabilities(scan_results)
+
+    findings_map: dict[tuple, list] = {}
+    for vf in vuln_findings:
+        key = (vf.host, vf.port)
+        finding_dict = {
+            "cve": vf.cve, "severity": vf.severity, "title": vf.title,
+            "recommendation": vf.recommendation, "kb_id": vf.kb_id,
+        }
+        findings_map.setdefault(key, []).append(enrich_finding(finding_dict))
+
+    output = []
+    all_network_findings = []
+    for r in scan_results:
+        if r.status != "open":
+            continue
+        port_findings = findings_map.get((r.host, r.port), [])
+        output.append({
+            "host": r.host, "port": r.port, "status": r.status,
+            "service": r.service or "unknown", "banner": r.banner or "",
+            "findings": port_findings,
+        })
+        all_network_findings.extend(port_findings)
+
+
+    _last_scan_findings["network"] = all_network_findings
+    logger.info("[Index] scan_network: сохранено %d находок", len(all_network_findings))
+    return output
+
+
+async def scan_web(
+    target_ip: str,
+    port: int,
+    cookies: Optional[dict] = None,
+) -> list[dict]:
+    """
+    Асинхронный аудит веб-уязвимостей (L7) с обогащением из базы знаний.
+    """
+    if not _WEB_SCANNER_AVAILABLE:
+        return [{"error": "Web Scanner module not available"}]
+    try:
+        web_result = await run_web_assessment(target_ip, port=port, cookies=cookies)
+        raw_findings = web_result.get("findings", [])
+        enriched = [enrich_finding(f) for f in raw_findings if f]
+        _last_scan_findings["web"] = enriched
+        logger.info(
+            "[Index] scan_web: сохранено %d находок (severities: %s)",
+            len(enriched),
+            [f.get("severity") for f in enriched],
+        )
+        return enriched
+    except Exception as e:
+        logger.error(f"scan_web error: {e}")
+        return [{"error": str(e)}]
 
 def get_security_index() -> int:
-    """Индекс безопасности от 0 до 100 на основе последнего DLP-скана."""
     score = 100
-    for f in _last_scan_findings:
+    all_f = _all_findings()
+    logger.info(
+        "[Index] get_security_index: всего находок = %d (dlp=%d, network=%d, web=%d)",
+        len(all_f),
+        len(_last_scan_findings["dlp"]),
+        len(_last_scan_findings["network"]),
+        len(_last_scan_findings["web"]),
+    )
+    for f in all_f:
         sev = f.get("severity", "").lower()
+        before = score
         if sev == "critical":
             score -= 10
         elif sev == "high":
             score -= 5
-    return max(0, score)
+        elif sev == "medium":
+            score -= 2
+        if score != before:
+            logger.info("[Index]   -%d за '%s' (severity=%s) → score=%d",
+                        before - score, f.get("title") or f.get("vuln_type"), sev, score)
+    final = max(0, score)
+    logger.info("[Index] Итоговый security_index = %d", final)
+    return final
 
 
 # ---------------------------------------------------------------------------
@@ -319,49 +393,7 @@ def vault_is_initialized() -> bool:
     return _vault_initialized()
 
 
-# ---------------------------------------------------------------------------
-# Network Scanner
-# ---------------------------------------------------------------------------
 
-async def scan_network(
-    target: str,
-    ports: Optional[list[int]] = None,
-) -> list[dict]:
-    """Асинхронное сканирование портов цели с обогащением из базы знаний."""
-    if not _SCANNER_AVAILABLE:
-        return [{"error": "Scanner module not available"}]
-
-    scan_results = await scan_ports(target, ports=ports)
-    vuln_findings = match_vulnerabilities(scan_results)
-
-    findings_map: dict[tuple, list] = {}
-    for vf in vuln_findings:
-        key = (vf.host, vf.port)
-        finding_dict = {
-            "cve": vf.cve,
-            "severity": vf.severity,
-            "title": vf.title,
-            "recommendation": vf.recommendation,
-            "kb_id": vf.kb_id,
-        }
-        # Обогащаем находку из базы знаний
-        enriched = enrich_finding(finding_dict)
-        findings_map.setdefault(key, []).append(enriched)
-
-    output = []
-    for r in scan_results:
-        if r.status != "open":
-            continue
-        output.append({
-            "host": r.host,
-            "port": r.port,
-            "status": r.status,
-            "service": r.service or "unknown",
-            "banner": r.banner or "",
-            "findings": findings_map.get((r.host, r.port), []),
-        })
-
-    return output
 
 
 # ---------------------------------------------------------------------------
@@ -381,26 +413,6 @@ async def run_osint_report(
         return {"error": str(e)}
 
 
-# ---------------------------------------------------------------------------
-# Web Scanner (L7)
-# ---------------------------------------------------------------------------
-
-async def scan_web(
-    target_ip: str,
-    port: int,
-    cookies: Optional[dict] = None,
-) -> list[dict]:
-    """
-    Асинхронный аудит веб-уязвимостей (L7) с обогащением из базы знаний.
-    """
-    if not _WEB_SCANNER_AVAILABLE:
-        return [{"error": "Web Scanner module not available"}]
-    try:
-        raw_findings = await run_web_assessment(target_ip, port=port, cookies=cookies)
-        return [enrich_finding(f) for f in raw_findings if f]
-    except Exception as e:
-        logger.error(f"scan_web error: {e}")
-        return [{"error": str(e)}]
 
 
 # ---------------------------------------------------------------------------
@@ -578,23 +590,29 @@ async def run_combined_pipeline(
 
     # 3. Web Scanner (HTTP-заголовки, TLS) — только для http/https хостов
     if _WEB_SCANNER_AVAILABLE:
-        web_port = 443 if not is_local else 80
-        try:
-            web_findings = await run_web_assessment(domain, port=web_port)
-            enriched_web = [enrich_finding(f) for f in (web_findings or []) if f]
-            result["web"] = enriched_web
-            result["findings"].extend(enriched_web)
-        except Exception as e:
-            logger.warning("Web scanner fallback error: %s", e)
-            # Пробуем порт 80 если 443 упал
-            if web_port == 443:
-                try:
-                    web_findings = await run_web_assessment(domain, port=80)
-                    enriched_web = [enrich_finding(f) for f in (web_findings or []) if f]
-                    result["web"] = enriched_web
-                    result["findings"].extend(enriched_web)
-                except Exception as e2:
-                    logger.warning("Web scanner port 80 also failed: %s", e2)
+        open_web_ports = sorted({
+            entry["port"] for entry in result["network"]
+            if entry["port"] in (80, 443, 8080, 8443)
+        }) or [443 if not is_local else 80]  # fallback если сканер портов не нашёл открытых веб-портов
+
+        for wp in open_web_ports:
+            try:
+                web_result = await run_web_assessment(domain, port=wp)
+
+                raw_findings = web_result.get("findings", []) if isinstance(web_result, dict) else []
+                enriched_web = [enrich_finding(f) for f in raw_findings if f]
+
+                result["web"].extend(enriched_web)
+                result["findings"].extend(enriched_web)
+
+            # technologies/headers тоже полезны — можно сложить отдельно
+                result.setdefault("web_technologies", {})[wp] = web_result.get("technologies", [])
+                result.setdefault("web_headers", {})[wp] = web_result.get("headers", [])
+
+            except Exception as e:
+                logger.warning("Web scanner error on port %s: %s", wp, e)
+                
+				
 
     if enrich and result["findings"]:
         result["recommendations"] = generate_recommendations(result["findings"])

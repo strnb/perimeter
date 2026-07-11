@@ -522,31 +522,141 @@ def home_page(
             page.update()
 
     # ── Расчёт Score ─────────────────────────────────────────────────────────
-    def _calc_project_score(dlp_findings: list) -> int:
-        score = 100
-        for f in dlp_findings:
+    #
+    # Модель: штрафная от 100, с весами по типу и severity.
+    #
+    # Принципы:
+    #   1. INFO-находки (OSINT-субдомены, DNS-записи) не штрафуют — это разведка,
+    #      а не уязвимости. Штраф только за реальные проблемы.
+    #   2. Штраф убывает при накоплении однотипных находок (закон убывающей отдачи):
+    #      1-я находка типа = полный штраф, каждая следующая = 60% от предыдущей.
+    #      Это не позволяет 30 открытым портам обнулить счёт при отсутствии критичного.
+    #   3. Типы с разным весом — секрет в коде критичнее открытого порта 80.
+    #   4. Бонус за «чистые» категории: если ни одной находки по категории — +3 очка.
+    #      Максимум бонусов: +15 (5 категорий × 3).
+
+    # Базовые штрафы за severity внутри каждого типа
+    _SEV_PENALTY = {
+        "CRITICAL": 25,
+        "HIGH":     15,
+        "MEDIUM":    7,
+        "LOW":       2,
+        "INFO":      0,   # только информация, не штрафуем
+    }
+
+    # Множитель важности по типу находки (применяется к _SEV_PENALTY)
+    _TYPE_WEIGHT = {
+        # Критичные — секреты и ключи в коде
+        "ssh_key":        2.0,
+        "aws_key":        2.0,
+        "aws_secret":     2.0,
+        "github":         1.8,
+        "openai":         1.8,
+        "telegram":       1.6,
+        "jwt":            1.6,
+        "password":       1.8,
+        "secret":         1.8,
+        "git_secret":     1.6,
+        # Конфиги — менее критичны, но важны
+        "config":         1.2,
+        "env":            1.4,
+        "docker":         1.1,
+        "yaml":           1.0,
+        "toml":           1.0,
+        "ini":            1.0,
+        "cfg":            1.0,
+        # Сеть — порты и уязвимости
+        "vulnerability":  1.5,
+        "open_port":      0.6,   # открытый порт сам по себе — не уязвимость
+        # Web — заголовки и TLS важны, но не критичны
+        "header":         0.9,
+        "tls":            1.1,
+        "ssl":            1.1,
+        "cert":           1.2,
+        # OSINT — чисто информация
+        "osint_subdomain": 0.0,
+        "osint_dns":       0.0,
+        "osint_whois":     0.0,
+        # Ошибки сканера — не штрафуем
+        "scanner_error":  0.0,
+    }
+
+    def _type_weight(ftype: str) -> float:
+        """Возвращает множитель для типа находки."""
+        ft_low = (ftype or "").lower()
+        for key, w in _TYPE_WEIGHT.items():
+            if key in ft_low:
+                return w
+        return 1.0  # неизвестный тип — стандартный вес
+
+    def _calc_score(findings: list) -> int:
+        """
+        Универсальная функция расчёта индекса безопасности.
+        Работает одинаково для project и web режимов.
+        """
+        # Категории для бонусов
+        categories = {
+            "secrets":  False,   # True если есть хоть одна находка
+            "configs":  False,
+            "ports":    False,
+            "web":      False,
+            "vulns":    False,
+        }
+
+        # Накапливаем штраф с убыванием по типу
+        # penalty_by_type: тип → накопленный штраф
+        penalty_by_type: dict[str, float] = {}
+
+        for f in findings:
             if "error" in f:
                 continue
-            sev = (f.get("severity") or "").upper()
-            if sev in ("CRITICAL", "HIGH"):
-                score -= 10
-            elif sev == "MEDIUM":
-                score -= 4
-            elif sev == "LOW":
-                score -= 1
-        return max(0, score)
+
+            sev = (f.get("severity") or "INFO").upper()
+            base_penalty = _SEV_PENALTY.get(sev, 0)
+            if base_penalty == 0:
+                continue  # INFO и неизвестные severity — пропускаем
+
+            ftype = (f.get("type") or f.get("vuln_type") or "").lower()
+            weight = _type_weight(ftype)
+            if weight == 0.0:
+                continue  # тип с нулевым весом (OSINT info, ошибки) — пропускаем
+
+            penalty = base_penalty * weight
+
+            # Закон убывающей отдачи: каждая следующая находка того же типа — 60%
+            if ftype not in penalty_by_type:
+                penalty_by_type[ftype] = penalty
+            else:
+                # Следующая находка = 60% от последнего штрафа этого типа
+                next_penalty = penalty_by_type[ftype] * 0.6
+                penalty_by_type[ftype] += next_penalty
+
+            # Отмечаем категорию как «затронутую»
+            if any(k in ftype for k in ("secret", "ssh", "aws", "github", "openai", "telegram", "jwt", "password", "git_secret")):
+                categories["secrets"] = True
+            elif any(k in ftype for k in ("config", "env", "docker", "yaml", "toml", "ini", "cfg")):
+                categories["configs"] = True
+            elif ftype in ("open_port",):
+                categories["ports"] = True
+            elif any(k in ftype for k in ("header", "tls", "ssl", "cert")):
+                categories["web"] = True
+            elif ftype == "vulnerability":
+                categories["vulns"] = True
+
+        total_penalty = sum(penalty_by_type.values())
+
+        # Бонус за чистые категории (+3 за каждую незатронутую, максимум +15)
+        bonus = sum(3 for touched in categories.values() if not touched)
+
+        score = 100 - total_penalty + bonus
+        return max(0, min(100, round(score)))
+
+    # Алиасы для обратной совместимости с вызовами ниже
+    def _calc_project_score(dlp_findings: list) -> int:
+        return _calc_score(dlp_findings)
 
     def _calc_web_score(findings: list) -> int:
-        score = 100
-        for f in findings:
-            sev = (f.get("severity") or "").upper()
-            if sev in ("CRITICAL", "HIGH"):
-                score -= 10
-            elif sev == "MEDIUM":
-                score -= 4
-            elif sev == "LOW":
-                score -= 1
-        return max(0, score)
+        return _calc_score(findings)
 
     # ── Сборка страницы ──────────────────────────────────────────────────────
     return ft.Column(
