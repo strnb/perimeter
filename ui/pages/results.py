@@ -600,22 +600,26 @@ def results_page(
                     ft.Divider(color="#251b45"),
                     ft.Container(height=10),
 
-                    # Score по центру
-                    score_widget,
-                    ft.Container(height=16),
-
-                    # Итоговые строки
-                    ft.Container(
-                        content=ft.Column(summary_items, spacing=10),
-                        bgcolor="#18122b",
-                        border_radius=12,
-                        padding=16,
-                        border=ft.Border(
-                            top=ft.BorderSide(1, "#251b45"),
-                            bottom=ft.BorderSide(1, "#251b45"),
-                            left=ft.BorderSide(1, "#251b45"),
-                            right=ft.BorderSide(1, "#251b45"),
-                        ),
+                    # Score слева + плашка справа
+                    ft.Row(
+                        controls=[
+                            score_widget,
+                            ft.Container(
+                                content=ft.Column(summary_items, spacing=10),
+                                bgcolor="#18122b",
+                                border_radius=12,
+                                padding=16,
+                                border=ft.Border(
+                                    top=ft.BorderSide(1, "#251b45"),
+                                    bottom=ft.BorderSide(1, "#251b45"),
+                                    left=ft.BorderSide(1, "#251b45"),
+                                    right=ft.BorderSide(1, "#251b45"),
+                                ),
+                                expand=True,
+                            ),
+                        ],
+                        spacing=24,
+                        vertical_alignment=ft.CrossAxisAlignment.CENTER,
                     ),
 
                     ft.Container(height=20),
