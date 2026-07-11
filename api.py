@@ -104,7 +104,7 @@ async def run_project_audit(
     # Git
     #
 
-    result["git"] = scan_git(path)
+    # result["git"] = scan_git(path)
 
     #
     # DLP
@@ -156,15 +156,63 @@ def enrich_finding(finding: dict) -> dict:
     kb_id = finding.get("kb_id", "")
 
     TYPE_TO_KB = {
-        "ssh_key":     "VULN-005",
-        "aws_key":     "VULN-007",
-        "aws_secret":  "VULN-007",
-        "github":      "VULN-007",
-        "openai":      "VULN-007",
-        "telegram":    "VULN-007",
-        "jwt":         "VULN-007",
-        "password":    "VULN-006",
-    }
+        # SSH и приватные ключи
+        "ssh_key":              "VULN-005",
+
+        # Токены и API-ключи
+        "aws_key":              "VULN-007",
+        "aws_secret":           "VULN-007",
+        "github":               "VULN-007",
+        "gitlab":               "VULN-007",
+        "openai":               "VULN-007",
+        "telegram":             "VULN-007",
+        "jwt":                  "VULN-007",
+        "api_token":            "VULN-007",
+
+        # Пароли и секреты в коде
+        "password":             "VULN-006",
+        "empty_password":       "VULN-043",
+        "dockerfile_secret":    "VULN-041",
+
+        # Небезопасные конфиги
+        "debug_enabled":        "VULN-042",
+        "localhost_db":         "VULN-044",
+        "compose_secret":       "VULN-045",
+        "dockerfile_root":      "VULN-039",
+        "dockerfile_add":       "VULN-040",
+        
+        # Инъекции в коде
+        "sql_injection":        "VULN-031",
+        "command_injection":    "VULN-032",
+        "weak_session_id":      "VULN-033",
+
+        # Веб-сканер
+        "brute_force":          "VULN-034",
+        "csrf":                 "VULN-035",
+        "xss":                  "VULN-036",
+        "file_upload":          "VULN-037",
+        "open_redirect":        "VULN-038",
+
+        # Сетевые сервисы (из network scanner)
+        "open_redis":           "VULN-001",
+        "open_mongodb":         "VULN-002",
+        "open_ftp":             "VULN-003",
+        "open_telnet":          "VULN-004",
+        "open_mysql":           "VULN-010",
+        "open_postgres":        "VULN-011",
+        "open_smb":             "VULN-012",
+        "open_rdp":             "VULN-013",
+        "default_creds":        "VULN-014",
+        "outdated_software":    "VULN-015",
+
+        # CVE
+        "CVE-2011-2523":        "VULN-016",
+        "CVE-2010-4221":        "VULN-017",
+        "CVE-2007-2447":        "VULN-019",
+        "CVE-2004-2687":        "VULN-020",
+        "CVE-2010-2075":        "VULN-021",
+        "CVE-2011-3556":        "VULN-028",
+}
 
     target_id = kb_id or TYPE_TO_KB.get(finding_type, "")
     if not target_id:

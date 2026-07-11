@@ -6,43 +6,110 @@ from .yara_scanner import run_yara
 from .command_injection_detector import detect_command_injection
 from .sql_injection_detector import detect_sql_injection
 from .weak_session_detector import detect_weak_session
-from .dockerfile_detector import DOCKERFILE_NAMES
-from .dockerfile_detector import detect_dockerfile
-from .config_detector import CONFIG_FILENAMES
-from .config_detector import detect_config
+from .dockerfile_detector import DOCKERFILE_NAMES, detect_dockerfile
+from .config_detector import CONFIG_FILENAMES, detect_config
 
-ALLOWED_EXTENSIONS = {".txt", ".py", ".env", ".json", ".yaml", ".yml", ".cfg", ".ini", ".conf", ".php", ".cpp", ".js", ".mjs", ".pem", ".key", ".ppk", ".dockerfile"}
+# ---------------------------------------------------------------------------
+# Расширения файлов которые читаем и сканируем содержимое
+# ---------------------------------------------------------------------------
+ALLOWED_EXTENSIONS = {
+    # Языки программирования
+    ".py", ".rb", ".php", ".js", ".mjs", ".ts", ".jsx", ".tsx",
+    ".java", ".kt", ".scala", ".groovy",        # JVM
+    ".cs", ".vb",                               # .NET
+    ".go", ".rs",                               # системные
+    ".cpp", ".c", ".h", ".hpp", ".cc",          # C/C++
+    ".swift", ".m",                             # Apple
+    ".pl", ".pm",                               # Perl
+    ".sh", ".bash", ".zsh", ".fish", ".ps1", ".psm1", ".bat", ".cmd",  # shell
 
-EXCLUDED_DIRS = {"venv", ".venv", ".git", "node_modules", "__pycache__", ".idea"}
+    # Конфиги и данные
+    ".env", ".json", ".yaml", ".yml", ".toml", ".xml",
+    ".cfg", ".ini", ".conf", ".config", ".properties",
+    ".settings", ".plist", ".htaccess",
 
-MAX_FILE_SIZE = 1 * 1024 * 1024  # 1 МБ в байтах
+    # Инфраструктура как код
+    ".dockerfile",
+    ".tf", ".tfvars",                           # Terraform
+    ".hcl",                                     # HashiCorp (Vault, Consul)
+    ".nomad",                                   # Nomad
+    ".gradle", ".pom",                          # Java build
 
-KEY_FILENAMES = {"id_rsa", "id_ed25519", "id_dsa", "id_ecdsa"}
+    # CI/CD
+    ".travis.yml",                              # ловится через .yml, но явно для ясности
+
+    # Ключи и сертификаты
+    ".pem", ".key", ".ppk", ".crt", ".cer", ".p12", ".pfx", ".jks",
+
+    # Текст и документация
+    ".txt", ".md", ".rst", ".log", ".csv",
+
+    # Веб
+    ".html", ".htm", ".vue", ".svelte", ".ejs", ".jinja", ".j2",
+
+    # SQL
+    ".sql",
+}
+
+# ---------------------------------------------------------------------------
+# Файлы детектируемые по имени — включаем вне зависимости от расширения
+# Содержимое всё равно читается и сканируется
+# ---------------------------------------------------------------------------
+KEY_FILENAMES = {
+    # SSH ключи (обычно без расширения)
+    "id_rsa", "id_ed25519", "id_dsa", "id_ecdsa",
+
+    # Известные конфиги без расширения
+    "Makefile", "Procfile",
+    ".env", ".htpasswd", ".netrc",
+    "config", "secrets", "credentials",
+}
+
+# ---------------------------------------------------------------------------
+# Директории которые полностью пропускаем
+# ---------------------------------------------------------------------------
+EXCLUDED_DIRS = {
+    "venv", ".venv", "env",
+    ".git",
+    "node_modules",
+    "__pycache__",
+    ".idea", ".vscode",
+    "dist", "build", "target",          # артефакты сборки
+    ".terraform",                        # Terraform state (бинарный)
+    "coverage", ".pytest_cache",
+}
+
+MAX_FILE_SIZE = 1 * 1024 * 1024  # 1 МБ — бинарники и дампы пропускаем
+
 
 def walk_files(root: str) -> list[Path]:
     result = []
 
     for path in Path(root).rglob("*"):
-        # Пропустить если это папка, а не файл
         if not path.is_file():
             continue
-        # Пропустить если файл лежит внутри запрещённой папки
+
+        # Пропустить если внутри запрещённой директории
         if any(part in EXCLUDED_DIRS for part in path.parts):
             continue
-        # Пропустить если расширение не в списке разрешённых
-        if path.suffix not in ALLOWED_EXTENSIONS:
-            continue
-        # Пропустить если файл больше 1 МБ
+
+        # Пропустить файлы больше 1 МБ
         if path.stat().st_size > MAX_FILE_SIZE:
             continue
-        # Файлы с опасными именами — включать вне зависимости от расширения
-        if path.name in KEY_FILENAMES or path.name in DOCKERFILE_NAMES or path.name in CONFIG_FILENAMES:
+
+        # Файлы с известными опасными именами — включать по имени
+        if path.name in KEY_FILENAMES \
+                or path.name in DOCKERFILE_NAMES \
+                or path.name in CONFIG_FILENAMES:
             result.append(path)
             continue
-        
-        result.append(path)
+
+        # Все остальные — только если расширение в списке разрешённых
+        if path.suffix in ALLOWED_EXTENSIONS:
+            result.append(path)
 
     return result
+
 
 def run_scan(root: str) -> list[dict]:
     findings = []
@@ -63,7 +130,7 @@ def run_scan(root: str) -> list[dict]:
         findings += detect_dockerfile(file, lines)
         findings += detect_config(file, lines)
 
-    # Дедупликация — убрать записи с одинаковым типом и файлом
+    # Дедупликация по типу + файл + строка
     seen = set()
     unique = []
     for f in findings:
