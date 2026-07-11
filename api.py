@@ -421,38 +421,35 @@ async def run_combined_pipeline(
 
         OSINT
             ↓
-        Scanner
+        Scanner (порты + уязвимости)
             ↓
-        Web Scanner
+        Web Scanner (заголовки, TLS)
             ↓
         Report
+
+    Если основной pipeline недоступен — собирает результат
+    напрямую из доступных модулей (OSINT + Scanner + Web).
     """
 
-    if not _PIPELINE_AVAILABLE:
-        return {"error": "Audit module not available"}
+    # ── Попытка через полный pipeline ───────────────────────────────────────
+    if _PIPELINE_AVAILABLE:
+        try:
+            result = await run_audit(
+                domain=domain,
+                wordlist_path=wordlist_path,
+                ports=ports,
+                host_concurrency=host_concurrency,
+                enrich=enrich,
+            )
 
-    try:
-
-        result = await run_audit(
-            domain=domain,
-            wordlist_path=wordlist_path,
-            ports=ports,
-            host_concurrency=host_concurrency,
-            enrich=enrich,
-        )
-
-        if enrich and "findings" in result:
-
-            enriched = []
-
-            for finding in result["findings"]:
-
-                if isinstance(finding, dict):
-                    enriched.append(enrich_finding(finding))
-                else:
-                    enriched.append(
-                        enrich_finding(
-                            {
+            if enrich and "findings" in result:
+                enriched = []
+                for finding in result["findings"]:
+                    if isinstance(finding, dict):
+                        enriched.append(enrich_finding(finding))
+                    else:
+                        enriched.append(
+                            enrich_finding({
                                 "host": finding.host,
                                 "port": finding.port,
                                 "service": finding.service,
@@ -462,26 +459,149 @@ async def run_combined_pipeline(
                                 "title": finding.title,
                                 "recommendation": finding.recommendation,
                                 "kb_id": finding.kb_id,
-                            }
+                            })
                         )
-                    )
+                result["findings"] = enriched
+                result["recommendations"] = generate_recommendations(result["findings"])
 
-            result["findings"] = enriched
+            return result
 
-            if "findings" in result:
-                result["recommendations"] = generate_recommendations(
-                    result["findings"]
-                )
+        except Exception as e:
+            logger.warning("run_audit failed (%s), falling back to direct modules", e)
 
-        return result
+    # ── Fallback: собираем результат из отдельных модулей ───────────────────
+    logger.info("run_combined_pipeline: using direct module fallback for %s", domain)
 
-    except Exception as e:
+    result: dict = {
+        "domain": domain,
+        "findings": [],
+        "network": [],
+        "osint": {},
+        "web": [],
+    }
 
-        logger.exception("run_combined_pipeline")
+    # 1. OSINT — пропускаем для localhost/IP, он там бессмысленен
+    is_local = domain.lower() in ("localhost", "127.0.0.1", "::1") or domain.startswith("192.168.") or domain.startswith("10.")
+    if _OSINT_AVAILABLE and not is_local:
+        try:
+            osint = await run_osint(domain, wordlist_path=wordlist_path)
+            result["osint"] = osint
 
-        return {
-            "error": str(e)
-        }
+            # Субдомены → findings
+            for sub in osint.get("subdomains", []):
+                result["findings"].append({
+                    "type": "osint_subdomain",
+                    "title": f"Поддомен: {sub}",
+                    "severity": "INFO",
+                    "host": sub,
+                    "fix": "Убедитесь, что поддомен нужен и не является забытым стендом.",
+                })
+
+            # Открытые записи DNS → findings
+            for rec in osint.get("dns_records", []):
+                if isinstance(rec, dict) and rec.get("type") == "MX":
+                    result["findings"].append({
+                        "type": "osint_dns",
+                        "title": f"MX-запись: {rec.get('value', '')}",
+                        "severity": "INFO",
+                        "host": domain,
+                    })
+        except Exception as e:
+            logger.error("OSINT fallback error: %s", e)
+            result["osint"] = {"error": str(e)}
+
+    # 2. Сканирование портов
+    if _SCANNER_AVAILABLE:
+        # Для localhost явно используем 127.0.0.1 чтобы избежать проблем с IPv6
+        scan_target = "127.0.0.1" if domain.lower() in ("localhost", "::1") else domain
+        try:
+            scan_results = await scan_ports(scan_target, ports=ports)
+            vuln_findings = match_vulnerabilities(scan_results)
+
+            findings_map: dict = {}
+            for vf in vuln_findings:
+                key = (vf.host, vf.port)
+                fd = {
+                    "type": "vulnerability",
+                    "vuln_type": vf.cve or "unknown",
+                    "cve": vf.cve,
+                    "severity": vf.severity,
+                    "title": vf.title,
+                    "recommendation": vf.recommendation,
+                    "kb_id": vf.kb_id,
+                    "host": vf.host,
+                    "port": vf.port,
+                }
+                enriched_fd = enrich_finding(fd) if enrich else fd
+                findings_map.setdefault(key, []).append(enriched_fd)
+
+            for r in scan_results:
+                if r.status != "open":
+                    continue
+
+                port_vulns = findings_map.get((r.host, r.port), [])
+                sev = port_vulns[0]["severity"] if port_vulns else "LOW"
+
+                port_entry = {
+                    "host": r.host,
+                    "port": r.port,
+                    "status": r.status,
+                    "service": r.service or "unknown",
+                    "banner": r.banner or "",
+                    "findings": port_vulns,
+                }
+                result["network"].append(port_entry)
+
+                # Добавляем открытый порт как finding
+                result["findings"].append({
+                    "type": "open_port",
+                    "title": f"Открытый порт {r.port} ({r.service or 'unknown'})",
+                    "severity": sev,
+                    "host": r.host,
+                    "port": r.port,
+                    "banner": r.banner or "",
+                    "fix": f"Закройте порт {r.port} если сервис не используется снаружи.",
+                })
+
+                # Уязвимости порта тоже в общий список
+                for vf in port_vulns:
+                    result["findings"].append(vf)
+
+        except Exception as e:
+            logger.error("Port scanner fallback error: %s", e)
+            result["findings"].append({
+                "type": "scanner_error",
+                "title": f"Ошибка сканирования портов: {e}",
+                "severity": "INFO",
+                "host": scan_target,
+            })
+
+    # 3. Web Scanner (HTTP-заголовки, TLS) — только для http/https хостов
+    if _WEB_SCANNER_AVAILABLE:
+        web_port = 443 if not is_local else 80
+        try:
+            web_findings = await run_web_assessment(domain, port=web_port)
+            enriched_web = [enrich_finding(f) for f in (web_findings or []) if f]
+            result["web"] = enriched_web
+            result["findings"].extend(enriched_web)
+        except Exception as e:
+            logger.warning("Web scanner fallback error: %s", e)
+            # Пробуем порт 80 если 443 упал
+            if web_port == 443:
+                try:
+                    web_findings = await run_web_assessment(domain, port=80)
+                    enriched_web = [enrich_finding(f) for f in (web_findings or []) if f]
+                    result["web"] = enriched_web
+                    result["findings"].extend(enriched_web)
+                except Exception as e2:
+                    logger.warning("Web scanner port 80 also failed: %s", e2)
+
+    if enrich and result["findings"]:
+        result["recommendations"] = generate_recommendations(result["findings"])
+    else:
+        result["recommendations"] = []
+
+    return result
 # ---------------------------------------------------------------------------
 # Reports
 # ---------------------------------------------------------------------------
