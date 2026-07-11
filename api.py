@@ -129,7 +129,7 @@ async def run_project_audit(
 # База знаний (knowledge_base/vulnerabilities.json)
 # ---------------------------------------------------------------------------
 
-_KB_PATH = Path("knowledge_base/vulnerabilities.json")
+_KB_PATH = Path("core/vulnerabilities.json")
 _knowledge_base: list[dict] = []
 
 def _load_knowledge_base() -> list[dict]:

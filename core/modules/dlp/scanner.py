@@ -9,8 +9,9 @@ from .weak_session_detector import detect_weak_session
 from .dockerfile_detector import DOCKERFILE_NAMES
 from .dockerfile_detector import detect_dockerfile
 from .config_detector import CONFIG_FILENAMES
+from .config_detector import detect_config
 
-ALLOWED_EXTENSIONS = {".txt", ".py", ".env", ".json", ".yaml", ".yml", ".cfg", ".ini", ".conf", ".php", ".cpp", ".js", "mjs", ".pem", ".key", ".ppk", ".dockerfile"}
+ALLOWED_EXTENSIONS = {".txt", ".py", ".env", ".json", ".yaml", ".yml", ".cfg", ".ini", ".conf", ".php", ".cpp", ".js", ".mjs", ".pem", ".key", ".ppk", ".dockerfile"}
 
 EXCLUDED_DIRS = {"venv", ".venv", ".git", "node_modules", "__pycache__", ".idea"}
 
@@ -37,8 +38,6 @@ def walk_files(root: str) -> list[Path]:
         # Файлы с опасными именами — включать вне зависимости от расширения
         if path.name in KEY_FILENAMES or path.name in DOCKERFILE_NAMES or path.name in CONFIG_FILENAMES:
             result.append(path)
-            continue
-        if path.suffix not in ALLOWED_EXTENSIONS:
             continue
         
         result.append(path)

@@ -6,3 +6,6 @@ reportlab
 pathlib
 dnspython
 python-whois
+pymongo
+pymysql
+psycopg2-binary
