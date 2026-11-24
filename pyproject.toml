@@ -1,0 +1,26 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "perimeter"
+version = "1.0.0"
+description = "Терминальный комплекс аудита безопасности: DLP, сканер портов, OSINT, web-аудит, crypto vault, отчёты"
+requires-python = ">=3.10"
+dependencies = [
+    "yara-python",
+    "cryptography",
+    "httpx",
+    "reportlab",
+    "python-whois",
+    "dnspython",
+]
+
+[project.scripts]
+perimeter = "cli:main"
+
+[tool.setuptools]
+py-modules = ["cli", "database"]
+
+[tool.setuptools.packages.find]
+include = ["core*", "api*"]
