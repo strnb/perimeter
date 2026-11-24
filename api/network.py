@@ -8,7 +8,7 @@ from .knowledge import enrich_finding
 logger = logging.getLogger(__name__)
 
 try:
-    from core.modules.scanner.port_scanner import scan_ports, DEFAULT_PORTS
+    from core.modules.scanner.port_scanner import scan_ports
     from core.modules.scanner.vuln_signatures import match_vulnerabilities
     _SCANNER_AVAILABLE = True
 except ImportError:

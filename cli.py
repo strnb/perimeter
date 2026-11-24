@@ -3,6 +3,7 @@ perimeter — терминальный комплекс аудита безоп�
 """
 import argparse
 import asyncio
+import dataclasses
 import difflib
 import getpass
 import json
@@ -50,8 +51,13 @@ def _ports_arg(value):
     return ports
 
 
+def _jsonable(obj):
+    # датаклассы (ScanResult и т.п.) -> dict, остальное -> str
+    return dataclasses.asdict(obj) if dataclasses.is_dataclass(obj) else str(obj)
+
+
 def _dump(obj):
-    print(json.dumps(obj, ensure_ascii=False, indent=2, default=str))
+    print(json.dumps(obj, ensure_ascii=False, indent=2, default=_jsonable))
 
 
 def _save_report_flag(args, findings):
@@ -106,12 +112,15 @@ def cmd_scan(args):
 
     vuln_count = 0
     details = []
+    report_findings = []  # плоский список для отчёта: host/port + сама уязвимость
     for f in findings:
         print(f"[+] {f['host']}:{f['port']}  {f['service']}  {f['banner']}")
         port_vulns = f.get("findings", [])
         vuln_count += len(port_vulns)
         for vuln in port_vulns:
             print(f"    ↳ [!] {vuln.get('title', 'Уязвимость')} — {vuln.get('severity', '?')}")
+            report_findings.append({"host": f["host"], "port": f["port"],
+                                    "service": f["service"], **vuln})
         rows = port_vulns or [{}]
         for vuln in rows:
             details.append({
@@ -121,7 +130,7 @@ def cmd_scan(args):
 
     database.save_network_result(_now(), args.target, len(findings), vuln_count, details)
     print(f"\nОткрытых портов: {len(findings)}, уязвимостей: {vuln_count}")
-    _save_report_flag(args, findings)
+    _save_report_flag(args, report_findings)
     return 0
 
 

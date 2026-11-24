@@ -23,8 +23,8 @@ def register_fonts():
         pdfmetrics.registerFont(TTFont('DejaVuSans', str(font_path)))
     except Exception as e:
         print(f"[ERROR] Не удалось загрузить кастомный шрифт: {e}")
-        # Фолбэк на базовый шрифт, если ничего не вышло (могут быть квадраты, но скрипт не упадет)
-        pdfmetrics.registerFont(TTFont('DejaVuSans', 'Helvetica'))
+        # фолбэк на встроенную Helvetica под тем же именем (могут быть квадраты, но скрипт не упадет)
+        pdfmetrics.registerFont(pdfmetrics.Font('DejaVuSans', 'Helvetica', 'WinAnsiEncoding'))
 
 def make_recommendation_box(text, style):
     """Создает красивую зеленую плашку для рекомендаций."""

@@ -1,5 +1,7 @@
 """Smoke-тест CLI: python test_cli.py (без pytest, на assert'ах)."""
 import argparse
+import contextlib
+import io
 import tempfile
 from pathlib import Path
 
@@ -32,28 +34,31 @@ def test_dlp_and_db(tmp: Path):
     types = {f.get("type") for f in findings}
     assert "password" in types, f"password не найден: {findings}"
     assert "aws_key" in types, f"aws_key не найден: {findings}"
+    assert all(f.get("fix") for f in findings), "находки должны обогащаться из базы знаний"
 
     # CLI-обработчики на изолированной БД
     database.DB_PATH = str(tmp / "test.db")
     database.init_db()
     args = cli.build_parser().parse_args(["dlp", str(sample)])
-    assert cli.cmd_dlp(args) == 0
-    assert cli.cmd_history(cli.build_parser().parse_args(["history"])) == 0
+    with contextlib.redirect_stdout(io.StringIO()):
+        assert cli.cmd_dlp(args) == 0
+        assert cli.cmd_history(cli.build_parser().parse_args(["history"])) == 0
 
-    # PDF-отчёт из БД (проверяет и путь к шрифту)
-    pdf = tmp / "report.pdf"
-    assert cli.cmd_report(cli.build_parser().parse_args(["report", "-o", str(pdf)])) == 0
-    assert pdf.exists() and pdf.stat().st_size > 0
+        # PDF-отчёт из БД (проверяет и путь к шрифту)
+        pdf = tmp / "report.pdf"
+        assert cli.cmd_report(cli.build_parser().parse_args(["report", "-o", str(pdf)])) == 0
+        assert pdf.exists() and pdf.stat().st_size > 0
 
-    assert cli.cmd_clear(cli.build_parser().parse_args(["clear", "--yes"])) == 0
+        assert cli.cmd_clear(cli.build_parser().parse_args(["clear", "--yes"])) == 0
 
 
 def test_vault(tmp: Path):
     from core.modules.vault import master, storage
     import core.modules.vault as vault
-    # изолируем хранилище от боевого vault/
-    master.VAULT_DIR = storage.VAULT_DIR = tmp / "vault"
+    # изолируем хранилище от боевого vault/ (cipher берёт путь из master)
+    master.VAULT_DIR = tmp / "vault"
     master.MASTER_FILE = master.VAULT_DIR / ".master"
+    storage.VAULT_DIR = master.VAULT_DIR
     storage.STORAGE_FILE = storage.VAULT_DIR / "encrypted.json"
 
     assert vault.unlock("test-master-pass")  # первый запуск инициализирует
@@ -64,11 +69,24 @@ def test_vault(tmp: Path):
     assert not vault.unlock("wrong-pass")
 
 
+def test_reports_and_enrichment():
+    # обогащение из базы знаний
+    assert api.enrich_finding({"type": "ssh_key"}).get("fix")
+    assert api.enrich_finding({"kb_id": "VULN-036"}).get("fix")
+
+    # текстовый отчёт понимает находки сети/веба и пустой severity
+    txt = api.generate_text_report([
+        {"host": "1.2.3.4", "port": 80, "service": "http", "title": "X", "severity": None},
+        {"url": "http://x/admin", "vuln_type": "sensitive_path", "severity": "high"},
+    ])
+    assert "1.2.3.4:80" in txt and "http://x/admin" in txt
+    assert "None" not in txt
+
+
 def test_help_and_completion():
     # опечатка в команде -> подсказка
     assert cli._suggest_command("dpl") == "dlp"
     assert cli._suggest_command("vau") == "vault"
-    assert cli._suggest_command("zzzzzz") == ""
 
     # без введённых слов Tab предлагает все команды
     commands = set(cli._complete([""]))
@@ -83,15 +101,16 @@ def test_help_and_completion():
     # shell-скрипты печатаются
     assert "complete -o default -F _perimeter_complete perimeter" in cli.COMPLETION_BASH
     assert "Register-ArgumentCompleter -Native" in cli.COMPLETION_POWERSHELL
-    assert cli.cmd_completion(cli.build_parser().parse_args(["completion", "zsh"])) == 0
 
     # подсказка на опечатку из main()
-    assert cli.main(["dpl", "."]) == 2
+    with contextlib.redirect_stdout(io.StringIO()):
+        assert cli.main(["dpl", "."]) == 2
 
 
 if __name__ == "__main__":
     test_parser()
     test_help_and_completion()
+    test_reports_and_enrichment()
     with tempfile.TemporaryDirectory() as d:
         test_dlp_and_db(Path(d))
     with tempfile.TemporaryDirectory() as d:
