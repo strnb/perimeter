@@ -20,16 +20,18 @@ def mask_secret(value: str) -> str:
     return value[:4] + "…" if len(value) > 8 else "…"
 
 
-def scan_dlp(path: str, show_secrets: bool = False, stats: dict | None = None) -> list[dict]:
+def scan_dlp(path: str, show_secrets: bool = False, stats: dict | None = None,
+             git: bool = False, git_depth: int = 0) -> list[dict]:
     """Запускает DLP-сканирование папки path.
 
+    git=True добавляет скан истории репозитория: секреты, удалённые из кода,
+    но оставшиеся в прошлых коммитах.
     По умолчанию значения секретов маскируются: отчёт могут переслать дальше.
-    stats заполняется счётчиками проверенных и пропущенных файлов.
     """
     if not _DLP_AVAILABLE:
         return [{"error": "DLP module not available"}]
 
-    raw = _dlp_run_scan(path, stats=stats)
+    raw = _dlp_run_scan(path, stats=stats, git_history=git, git_depth=git_depth)
     findings = [enrich_finding(f) for f in raw]
     if not show_secrets:
         for f in findings:

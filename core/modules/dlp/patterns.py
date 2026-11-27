@@ -77,8 +77,8 @@ def is_placeholder(value: str) -> bool:
     if low.startswith(("your_", "example", "dummy", "sample", "placeholder", "redacted",
                        "changeme", "change_me", "xxx", "todo")):
         return True
-    # VULN-006, API_KEY — имя константы, а не значение секрета
-    if re.fullmatch(r'[A-Z][A-Z0-9_-]{2,}', v):
+    # API_KEY / VULN-006 — идентификатор, а не значение секрета
+    if re.fullmatch(r'[A-Z][A-Z0-9]*(?:_[A-Z0-9]+)+', v) or re.fullmatch(r'(VULN|CVE)-[0-9]+', v):
         return True
     return not re.search(r'\w', v)
 

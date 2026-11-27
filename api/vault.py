@@ -23,11 +23,9 @@ except ImportError:
 def vault_unlock(password: str) -> bool:
     if not _VAULT_AVAILABLE:
         return False
-    try:
-        return _vault_unlock(password)
-    except Exception as e:
-        logger.error(f"vault_unlock error: {e}")
-        return False
+    # RuntimeError (потерян .salt) должен дойти до пользователя, а не стать
+    # «неверным паролем»
+    return _vault_unlock(password)
 
 
 def vault_lock():

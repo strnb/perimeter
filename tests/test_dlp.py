@@ -1,5 +1,6 @@
 """Тесты DLP: python tests/test_dlp.py (assert'ы, без pytest)."""
 import json
+import os
 import sys
 import tempfile
 from pathlib import Path
@@ -30,6 +31,7 @@ SECRETS = {
         'JWT_TOKEN = "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.dozjgNryP4J3jVmNHl0w5N_XgL0n3I9PlFUP0THsR8U"\n'
     ),
     "dup.env": 'password = "SameSecret123"\npassword = "SameSecret123"\n',
+    "upper.env": "DB_PASSWORD=PRODSECRET2024\npassword = MYPASS2024\n",
     "dump.env": "".join(f"service{i}_password = DumpSecret{i}000\n" for i in range(1, 7)),
 }
 
@@ -79,6 +81,7 @@ def test_positive(tmp: Path):
         "config.yaml": {"password", "generic_api_key"},
         "config.json": {"generic_api_key"},
         "prod.env": {"password", "generic_api_key"},
+        "upper.env": {"password"},
         "id_rsa": {"ssh_key"},
         "server.pem": {"ssh_key"},
         "docker-compose.yml": {"connection_string"},
@@ -98,6 +101,18 @@ def test_positive(tmp: Path):
     # два одинаковых секрета в разных строках — две находки
     dup = [f for f in findings if f["file"].endswith("dup.env")]
     assert len(dup) == 2 and {f["line"] for f in dup} == {1, 2}, dup
+
+    # пароль из заглавных букв и цифр — не имя константы
+    upper = [f for f in findings if f["file"].endswith("upper.env")]
+    assert len(upper) == 2, upper
+
+    # заглушка — только имя константы с подчёркиванием; пароль из заглавных
+    # букв и цифр секретом быть не перестаёт
+    from core.modules.dlp.patterns import is_placeholder
+    assert is_placeholder("API_KEY") is True
+    assert is_placeholder("VULN-006") is True
+    assert is_placeholder("PRODSECRET2024") is False
+    assert is_placeholder("MYPASS2024") is False
 
     # YARA даёт реальный номер строки и значение
     shadow = next(f for f in findings if f["type"] == "password_hash")
@@ -179,6 +194,132 @@ def test_code_checks(tmp: Path):
     assert "weak_session_id" in by_file.get("session.php", set()), by_file
 
 
+GIT_ENV = {
+    "GIT_AUTHOR_NAME": "Test Author",
+    "GIT_AUTHOR_EMAIL": "author@example.com",
+    "GIT_COMMITTER_NAME": "Test Author",
+    "GIT_COMMITTER_EMAIL": "author@example.com",
+}
+
+
+def _git(repo: Path, *args, env=None) -> str:
+    import subprocess
+    result = subprocess.run(
+        ["git", "-C", str(repo), *args],
+        capture_output=True, text=True, encoding="utf-8",
+        env={**os.environ, **GIT_ENV, **(env or {})},
+    )
+    assert result.returncode == 0, result.stderr
+    return result.stdout
+
+
+def _commit(repo: Path, files: dict, message: str, date: str) -> str:
+    for name, content in files.items():
+        path = repo / name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        if content is None:
+            path.unlink(missing_ok=True)
+        else:
+            path.write_text(content, encoding="utf-8")
+    _git(repo, "add", "-A")
+    env = {"GIT_AUTHOR_DATE": date, "GIT_COMMITTER_DATE": date}
+    _git(repo, "commit", "-m", message, env=env)
+    return _git(repo, "rev-parse", "HEAD").strip()
+
+
+def test_git_history(tmp: Path):
+    import shutil
+    from core.modules.dlp.git_history import is_git_repo, scan_git_history
+
+    if shutil.which("git") is None:
+        print("  (git не установлен — тест истории пропущен)")
+        return
+
+    repo = tmp / "repo"
+    repo.mkdir(parents=True)
+    _git(repo, "init", "-q")
+    _git(repo, "config", "user.name", "Test Author")
+    _git(repo, "config", "user.email", "author@example.com")
+
+    first = _commit(repo, {
+        "app.py": 'password = "HistSecret123"\n',
+        "gone.py": 'password = "GoneSecret42"\n',
+        "src/deep.py": 'password = "DeepSecret77"\n',
+    }, "add config", "2024-01-01T10:00:00")
+    _commit(repo, {"gone.py": None}, "remove old file", "2024-02-01T10:00:00")
+    _commit(repo, {"node_modules/pkg/index.js": 'const password = "NodeSecret123";\n'},
+            "vendor dump", "2024-03-01T10:00:00")
+    _commit(repo, {"current.env": "DB_PASSWORD=StillHere123\n"}, "keep another one",
+            "2024-04-01T10:00:00")
+    _commit(repo, {"gone.py": 'password = "GoneSecret42"\n'}, "bring it back",
+            "2024-05-01T10:00:00")
+    _commit(repo, {"gone.py": None}, "remove again", "2024-06-01T10:00:00")
+    head = _git(repo, "rev-parse", "HEAD").strip()
+
+    assert is_git_repo(str(repo))
+
+    stats = {}
+    findings = scan_git_history(str(repo), stats=stats)
+    by_file = {(f["file"], f["type"]): f for f in findings}
+
+    # секрет, которого уже нет в коде, найден в истории
+    secret = by_file[("gone.py", "password")]
+    assert secret["value"] == "GoneSecret42"
+    assert secret["commit_full"] == first, (secret["commit_full"], first)
+    assert secret["date"] == "2024-01-01", secret
+    assert secret["commits"] == 2, secret
+    assert secret["source"] == "git" and secret["author"] == "Test Author"
+    assert secret["line"] == 1
+
+    # из node_modules история тоже не читается
+    assert not any(path.startswith("node_modules/") for path, _ in by_file), by_file
+
+    assert stats["git_commits"] == 6, stats
+    assert stats["git_error"] is None
+
+    # абсолютный путь вне репозитория — честная ошибка, а не тишина
+    outside = tmp / "plain"
+    outside.mkdir(parents=True, exist_ok=True)
+    stats = {}
+    assert scan_git_history(str(outside), stats=stats) == []
+    assert "не git-репозиторий" in stats["git_error"], stats
+
+    # глубина ограничивает число коммитов: последний коммит только удаляет файл
+    assert scan_git_history(str(repo), depth=1, stats={}) == []
+
+    # при скане подпапки в отчёт не попадает история чужих каталогов
+    inside = scan_git_history(str(repo / "src"), stats={})
+    assert [(f["file"], f["value"]) for f in inside] == [("src/deep.py", "DeepSecret77")], inside
+
+    # api: в рабочем каталоге секрета нет, а с --git он находится
+    fs_only = api.scan_dlp(str(repo))
+    assert not any(str(f.get("file", "")).endswith("gone.py") for f in fs_only), fs_only
+
+    stats = {}
+    with_git = api.scan_dlp(str(repo), git=True, stats=stats)
+    hist = next(f for f in with_git if f.get("file") == "gone.py")
+    assert hist["value"].startswith("Gone…"), hist
+    assert hist["commit"] == first[:12]
+    assert hist["commits"] == 2
+    assert stats["git_commits"] == 6
+
+    full = api.scan_dlp(str(repo), git=True, show_secrets=True)
+    assert any(f.get("value") == "GoneSecret42" for f in full)
+
+    # секрет, который до сих пор в файле, не дублируется
+    current = [f for f in with_git if str(f.get("file", "")).endswith("current.env")]
+    assert len(current) == 1, current
+    assert current[0]["also_in_git"] is True
+    assert current[0]["commits"] == 1
+
+    # текстовый отчёт показывает коммит
+    text = api.generate_text_report(with_git)
+    assert "Commit" in text and first[:12] in text, text
+
+    # история после HEAD не теряется при повторном коммите
+    assert _git(repo, "rev-parse", "HEAD").strip() == head
+
+
 def test_yara_and_errors(tmp: Path):
     from core.modules.dlp import yara_scanner
     assert yara_scanner.rules_failed() is False
@@ -207,4 +348,6 @@ if __name__ == "__main__":
         test_yara_and_errors(Path(d) / "yara")
     with tempfile.TemporaryDirectory() as d:
         test_code_checks(Path(d) / "code")
+    with tempfile.TemporaryDirectory() as d:
+        test_git_history(Path(d) / "git")
     print("OK: DLP-проверки пройдены")

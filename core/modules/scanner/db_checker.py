@@ -2,7 +2,9 @@ import asyncio
 import re
 import logging
 
-logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
+# Библиотека не настраивает корневой логгер: иначе любой импорт включает
+# INFO-логи httpx и прочих зависимостей у пользователя.
+logger = logging.getLogger(__name__)
 
 try:
     from pymongo import MongoClient
@@ -194,8 +196,11 @@ async def check_smb_ghost(host: str, port: int = 445, timeout: float = 2.0) -> d
         banner = data[32:].decode("utf-8", errors="ignore").strip("\x00").strip()
 
         if is_smb:
+            # Подтверждён только протокол, а не уязвимость: ответ на Negotiate
+            # даёт любой SMB-сервер, включая полностью обновлённый Windows.
             return {
-                "status": "open", "banner": banner, "vulnerable": True,
+                "status": "open", "banner": banner, "vulnerable": False,
+                "smb_confirmed": True,
                 "detail": f"SMB Negotiate подтверждён, данные: {banner[:80]!r}",
             }
         return {"status": "open", "banner": banner, "vulnerable": False}
@@ -408,7 +413,8 @@ async def check_distccd(host: str, port: int = 3632, timeout: float = 2.0) -> di
         return {
             "status": "open",
             "banner": banner or "distccd open",
-            "vulnerable": confirmed or True,  # открытый distccd = уязвимость всегда
+            # Открытый distccd опасен сам по себе, но подтверждён лишь протокол
+            "vulnerable": confirmed,
             "detail": "distccd protocol confirmed" if confirmed else "distccd port open",
         }
     except Exception:

@@ -37,6 +37,10 @@ def generate_text_report(findings: list[dict]) -> str:
             elif f.get("port"):
                 where = f"{where}:{f['port']}"
             lines.append(f"  Where  : {where}")
+            if f.get("commit"):
+                origin = "still in file, also in history" if f.get("also_in_git") else "removed from code"
+                lines.append(f"  Commit : {f['commit']} {f.get('date', '')} {f.get('subject', '')}".rstrip())
+                lines.append(f"  History: {origin}; commits with this secret: {f.get('commits', 1)}")
             if f.get("title"):
                 lines.append(f"  Title  : {f['title']}")
             if f.get("detail"):
@@ -52,10 +56,21 @@ def generate_text_report(findings: list[dict]) -> str:
 def save_report(findings: list[dict], reports_dir: str = "reports") -> tuple[str, str]:
     """Пишет JSON и TXT отчёт с меткой времени, возвращает оба пути."""
     Path(reports_dir).mkdir(exist_ok=True)
-    # секунды, чтобы два отчёта подряд не затирали друг друга
-    ts = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+    # микросекунды: два отчёта в одну секунду не должны затирать друг друга
+    ts = datetime.now().strftime("%Y-%m-%d_%H-%M-%S_%f")
     json_path = Path(reports_dir) / f"scan_{ts}.json"
     txt_path = Path(reports_dir) / f"scan_{ts}.txt"
     json_path.write_text(generate_json_report(findings), encoding="utf-8")
     txt_path.write_text(generate_text_report(findings), encoding="utf-8")
     return str(json_path), str(txt_path)
+
+
+def save_osint_report(result: dict, reports_dir: str = "reports") -> str:
+    """Полный OSINT-отчёт одним JSON — можно отдать в другой инструмент."""
+    Path(reports_dir).mkdir(exist_ok=True)
+    ts = datetime.now().strftime("%Y-%m-%d_%H-%M-%S_%f")
+    domain = str(result.get("domain") or "domain").replace("/", "_")
+    path = Path(reports_dir) / f"osint_{domain}_{ts}.json"
+    path.write_text(json.dumps(result, ensure_ascii=False, indent=2, default=str),
+                    encoding="utf-8")
+    return str(path)

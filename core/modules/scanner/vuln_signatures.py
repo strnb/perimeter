@@ -81,10 +81,10 @@ PORT_SIGNATURES = {
            "Закрыть порт снаружи, обновить/отключить сервис."),
     1099: ("HIGH", "CVE-2011-3556", "Java RMI Registry — RCE через десериализацию",
            "Закрыть порт 1099 снаружи, обновить JRE/RMI registry."),
-    6667: ("MEDIUM", "Possible UnrealIRCd Backdoor", "Обнаружен IRC-сервис",
-           "На Metasploitable 2 это исторически UnrealIRCd 3.2.8.1 с бэкдором (CVE-2010-2075). "
-           "Баннер не всегда виден до NICK/USER — проверить версию вручную."),
-    6697: ("MEDIUM", "Possible UnrealIRCd Backdoor", "Обнаружен IRC-сервис (SSL)",
+    6667: ("LOW", "IRC exposed", "Обнаружен IRC-сервис",
+           "Если IRC не нужен — закрыть порт. На Metasploitable 2 это исторически "
+           "UnrealIRCd 3.2.8.1 с бэкдором (CVE-2010-2075): проверить версию вручную."),
+    6697: ("LOW", "IRC exposed", "Обнаружен IRC-сервис (SSL)",
            "См. порт 6667 — тот же сервис, проверить версию вручную."),
     139: ("HIGH", "SMB exposed", "SMB/NetBIOS открыт из сети",
           "Закрыть SMB/NetBIOS снаружи. Версию Samba пассивный коннект не показывает — "
@@ -101,8 +101,6 @@ KB_GENERIC_PORT_RULES = {
          "Отключить FTP, заменить на SFTP/FTPS, запретить анонимный доступ."),
     23: ("VULN-004", "critical", "Telnet — все данные, включая пароли, в открытом виде",
          "Немедленно отключить Telnet, использовать SSH (apt remove telnetd)."),
-    22: ("VULN-005", "medium", "SSH доступен без ограничений — риск brute-force",
-         "Отключить вход по паролю, использовать ключи, поставить fail2ban."),
 }
 
 # Redis/Mongo по контракту Миши специфично "без аутентификации" —
@@ -150,8 +148,9 @@ def match_vulnerabilities(scan_results: list) -> list[VulnFinding]:
                 title=title, recommendation=rec,
             ))
 
-        # Generic-правила, привязанные к VULN-003/004/005 (FTP/Telnet/SSH)
-        if r.port in KB_GENERIC_PORT_RULES:
+        # Generic-правила, привязанные к VULN-003/004 (FTP/Telnet):
+        # только когда сервис реально ответил баннером, а не просто открыл порт
+        if r.port in KB_GENERIC_PORT_RULES and text.strip():
             kb_id, severity, title, rec = KB_GENERIC_PORT_RULES[r.port]
             findings.append(VulnFinding(
                 host=r.host, port=r.port, service=r.service,

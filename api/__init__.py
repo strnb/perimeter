@@ -8,7 +8,7 @@ pipeline, knowledge, reports), а здесь только реэкспорт: `i
 """
 
 from .knowledge import enrich_finding
-from .reports import generate_json_report, generate_text_report, save_report
+from .reports import generate_json_report, generate_text_report, save_report, save_osint_report
 from .dlp import scan_dlp
 from .vault import (
     vault_unlock,
@@ -30,6 +30,7 @@ __all__ = [
     "generate_json_report",
     "generate_text_report",
     "save_report",
+    "save_osint_report",
     # dlp
     "scan_dlp",
     # crypto vault

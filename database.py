@@ -24,7 +24,31 @@ def init_db():
         scan_time TEXT,
         target_domain TEXT,
         registrar TEXT,
-        subdomains_count INTEGER
+        subdomains_count INTEGER,
+        expires_at TEXT,
+        findings_count INTEGER DEFAULT 0
+    )
+    """)
+
+    # Миграция старых БД: срок домена и число находок
+    osint_columns = {row[1] for row in cursor.execute("PRAGMA table_info(osint_results)")}
+    if "expires_at" not in osint_columns:
+        cursor.execute("ALTER TABLE osint_results ADD COLUMN expires_at TEXT")
+    if "findings_count" not in osint_columns:
+        cursor.execute("ALTER TABLE osint_results ADD COLUMN findings_count INTEGER DEFAULT 0")
+
+    # Поддомены отдельно — по ним считается diff с прошлым сканом
+    cursor.execute("""
+    CREATE TABLE IF NOT EXISTS osint_subdomains (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        result_id INTEGER,
+        name TEXT,
+        ips TEXT,
+        cname TEXT,
+        source TEXT,
+        http_status INTEGER,
+        title TEXT,
+        FOREIGN KEY(result_id) REFERENCES osint_results(id) ON DELETE CASCADE
     )
     """)
     
@@ -35,10 +59,16 @@ def init_db():
         scan_time TEXT,
         checked_path TEXT,
         critical_count INTEGER,
+        high_count INTEGER DEFAULT 0,
         medium_count INTEGER,
         low_count INTEGER
     )
     """)
+
+    # Миграция старых БД: HIGH больше не считается CRITICAL
+    dlp_columns = {row[1] for row in cursor.execute("PRAGMA table_info(dlp_results)")}
+    if "high_count" not in dlp_columns:
+        cursor.execute("ALTER TABLE dlp_results ADD COLUMN high_count INTEGER DEFAULT 0")
 
     # Создаем таблицу Network результатов, если её нет
     cursor.execute("""
@@ -74,23 +104,64 @@ def init_db():
     conn.commit()
     conn.close()
 
-def save_osint_result(scan_time, target_domain, registrar, subdomains_count):
+def save_osint_result(scan_time, target_domain, registrar, subdomains_count,
+                      expires_at=None, findings_count=0, subdomains=None):
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
     cursor.execute("""
-    INSERT INTO osint_results (scan_time, target_domain, registrar, subdomains_count)
-    VALUES (?, ?, ?, ?)
-    """, (scan_time, target_domain, registrar, subdomains_count))
+    INSERT INTO osint_results
+        (scan_time, target_domain, registrar, subdomains_count, expires_at, findings_count)
+    VALUES (?, ?, ?, ?, ?, ?)
+    """, (scan_time, target_domain, registrar, subdomains_count, expires_at, findings_count))
+    result_id = cursor.lastrowid
+
+    for sub in subdomains or []:
+        info = sub.get("http") or {}
+        cursor.execute("""
+        INSERT INTO osint_subdomains
+            (result_id, name, ips, cname, source, http_status, title)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+        """, (
+            result_id,
+            sub.get("subdomain"),
+            ",".join(sub.get("ips") or []),
+            sub.get("cname"),
+            sub.get("source"),
+            info.get("status"),
+            info.get("title"),
+        ))
+
     conn.commit()
     conn.close()
 
-def save_dlp_result(scan_time, checked_path, critical_count, medium_count, low_count):
+
+def get_previous_osint_subdomains(target_domain):
+    """Имена поддоменов из последнего сохранённого скана домена."""
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    row = cursor.execute(
+        "SELECT id FROM osint_results WHERE target_domain = ? ORDER BY id DESC LIMIT 1",
+        (target_domain,),
+    ).fetchone()
+    names = set()
+    if row:
+        names = {
+            name for (name,) in cursor.execute(
+                "SELECT name FROM osint_subdomains WHERE result_id = ?", (row[0],)
+            )
+        }
+    conn.close()
+    return names
+
+def save_dlp_result(scan_time, checked_path, critical_count, medium_count, low_count,
+                    high_count=0):
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
     cursor.execute("""
-    INSERT INTO dlp_results (scan_time, checked_path, critical_count, medium_count, low_count)
-    VALUES (?, ?, ?, ?, ?)
-    """, (scan_time, checked_path, critical_count, medium_count, low_count))
+    INSERT INTO dlp_results
+        (scan_time, checked_path, critical_count, high_count, medium_count, low_count)
+    VALUES (?, ?, ?, ?, ?, ?)
+    """, (scan_time, checked_path, critical_count, high_count, medium_count, low_count))
     conn.commit()
     conn.close()
 
@@ -116,6 +187,7 @@ def save_network_result(scan_time, target, open_ports_count, vulnerabilities_cou
 def clear_all_data():
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
+    cursor.execute("DROP TABLE IF EXISTS osint_subdomains")
     cursor.execute("DROP TABLE IF EXISTS osint_results")
     cursor.execute("DROP TABLE IF EXISTS dlp_results")
     cursor.execute("DROP TABLE IF EXISTS network_results")
@@ -123,5 +195,3 @@ def clear_all_data():
     conn.commit()
     conn.close()
     init_db()  # Пересоздаем пустые таблицы
-# Вызываем инициализацию при импорте модуля
-init_db()

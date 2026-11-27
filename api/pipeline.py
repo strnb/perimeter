@@ -4,7 +4,6 @@ import logging
 from typing import Optional
 
 from .knowledge import enrich_finding
-from .paths import DEFAULT_WORDLIST
 
 logger = logging.getLogger(__name__)
 
@@ -18,13 +17,14 @@ except ImportError:
 
 async def run_combined_pipeline(
     domain: str,
-    wordlist_path: str = DEFAULT_WORDLIST,
+    wordlist_path: str = None,
     ports: Optional[list[int]] = None,
     host_concurrency: int = 10,
     enrich: bool = True,
+    scan: bool = False,
 ) -> dict:
     """
-    Запускает сквозной сценарий: OSINT -> Скан портов -> Обогащение.
+    Запускает сквозной сценарий: OSINT -> (по флагу scan) скан портов -> Обогащение.
     """
     if not _PIPELINE_AVAILABLE:
         return {"error": "Combined Pipeline module not available"}
@@ -34,7 +34,8 @@ async def run_combined_pipeline(
             wordlist_path=wordlist_path,
             ports=ports,
             host_concurrency=host_concurrency,
-            enrich=enrich
+            enrich=enrich,
+            scan=scan,
         )
         # Если требуется обогащение, прогоняем находки через базу знаний
         if enrich and "findings" in result:

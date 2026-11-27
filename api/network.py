@@ -46,8 +46,6 @@ async def scan_network(
 
     output = []
     for r in scan_results:
-        if r.status != "open":
-            continue
         output.append({
             "host": r.host,
             "port": r.port,

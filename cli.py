@@ -11,6 +11,7 @@ import os
 import sqlite3
 import sys
 from datetime import datetime
+from pathlib import Path
 
 import api
 import database
@@ -72,16 +73,24 @@ def _save_report_flag(args, findings):
 
 def cmd_dlp(args):
     stats = {}
-    findings = api.scan_dlp(args.path, show_secrets=getattr(args, "show_secrets", False), stats=stats)
+    findings = api.scan_dlp(
+        args.path,
+        show_secrets=getattr(args, "show_secrets", False),
+        stats=stats,
+        git=getattr(args, "git", False),
+        git_depth=getattr(args, "git_depth", 0),
+    )
     if findings and "error" in findings[0]:
         print(f"[-] {findings[0]['error']}")
         return 1
 
-    critical = medium = low = 0
+    critical = high = medium = low = 0
     for f in findings:
         sev = f.get("severity", "LOW").upper()
-        if sev in ("CRITICAL", "HIGH"):
+        if sev == "CRITICAL":
             critical += 1
+        elif sev == "HIGH":
+            high += 1
         elif sev == "MEDIUM":
             medium += 1
         else:
@@ -89,7 +98,13 @@ def cmd_dlp(args):
         kind = f.get("type") or f.get("vuln_type", "?")
         loc = f"{f.get('file', '?')}:{f.get('line', '?')}"
         match = f.get("raw_line") or f.get("match") or f.get("value") or ""
-        print(f"[{sev:8}] {kind:20} {loc}")
+        if f.get("commit"):
+            print(f"[{sev:8}] {kind:20} {loc}")
+            origin = "сейчас в файле, но есть и в истории" if f.get("also_in_git") else "удалён из кода"
+            print(f"           git {f['commit']} {f.get('date', '')} {f.get('subject', '')}")
+            print(f"           {origin}; коммитов с этим секретом: {f.get('commits', 1)}")
+        else:
+            print(f"[{sev:8}] {kind:20} {loc}")
         if match:
             print(f"           {str(match).strip()[:120]}")
         if f.get("fix"):
@@ -97,8 +112,8 @@ def cmd_dlp(args):
 
     if not findings:
         print("[+] Угроз не обнаружено")
-    database.save_dlp_result(_now(), args.path, critical, medium, low)
-    print(f"\nИтого: критических {critical}, средних {medium}, низких {low}")
+    database.save_dlp_result(_now(), args.path, critical, medium, low, high_count=high)
+    print(f"\nИтого: критических {critical}, высоких {high}, средних {medium}, низких {low}")
     if stats:
         skipped = [
             f"{label} {stats[key]}"
@@ -110,6 +125,11 @@ def cmd_dlp(args):
         print(f"Проверено файлов: {stats.get('scanned', 0)}{note}")
         if stats.get("yara_failed"):
             print("[!] YARA-правила недоступны — работают только regex-детекторы.")
+        if stats.get("git_commits") is not None and getattr(args, "git", False):
+            print(f"История git: коммитов {stats.get('git_commits', 0)}, "
+                  f"проверено добавленных строк {stats.get('git_lines', 0)}")
+        if stats.get("git_error"):
+            print(f"[!] История git не проверена: {stats['git_error']}")
     _save_report_flag(args, findings)
     return 0
 
@@ -147,35 +167,168 @@ def cmd_scan(args):
     return 0
 
 
+def _osint_value(value):
+    if value in (None, "", [], {}):
+        return "—"
+    if isinstance(value, list):
+        return ", ".join(str(item) for item in value) or "—"
+    return str(value)
+
+
+def _print_osint(result, previous_names):
+    domain = result.get("domain", "?")
+    cached = result.get("cached")
+    duration = result.get("duration_sec")
+    header = f"\nДомен: {domain}"
+    if cached:
+        header += f"  [из кэша, {result.get('cache_age_hours', '?')} ч назад]"
+    elif duration is not None:
+        header += f"  ({duration} с)"
+    print(header)
+
+    sources = result.get("sources") or {}
+    if sources:
+        print("Источники: " + " | ".join(f"{name} {status}" for name, status in sources.items()))
+
+    whois = result.get("whois") or {}
+    print("\nWHOIS")
+    if whois.get("error"):
+        print(f"  ошибка: {whois['error']}")
+    else:
+        print(f"  Регистратор : {_osint_value(whois.get('registrar'))}")
+        if whois.get("registrant_org") not in (None, "", "unknown"):
+            print(f"  Организация : {whois['registrant_org']}")
+        created = whois.get("creation_date")
+        age = whois.get("age_days")
+        print(f"  Создан      : {_osint_value(created)}"
+              + (f" ({age} дн.)" if isinstance(age, int) else ""))
+        expires = whois.get("expires_in_days")
+        expires_at = whois.get("expiration_date")
+        note = ""
+        if isinstance(expires, int):
+            note = f" (через {expires} дн.)"
+            if expires <= 30:
+                note += "  [!]"
+        print(f"  Истекает    : {_osint_value(expires_at)}{note}")
+        if whois.get("status"):
+            print(f"  Статус      : {_osint_value(whois['status'])}")
+        print(f"  NS          : {_osint_value(whois.get('name_servers'))}")
+
+    dns = result.get("dns") or {}
+    if dns:
+        print("\nDNS")
+        for rtype in ("A", "AAAA", "MX", "NS", "TXT", "CAA", "SOA", "DS"):
+            if dns.get(rtype):
+                values = [str(item)[:110] for item in dns[rtype]]
+                print(f"  {rtype:<5}: {', '.join(values)}")
+        security = result.get("security") or {}
+        dnssec = "да" if security.get("dnssec") else "нет [!]"
+        print(f"  DNSSEC: {dnssec}")
+
+    email = result.get("email") or {}
+    if email:
+        print("\nПОЧТА")
+        spf = email.get("spf") or {}
+        if spf.get("record"):
+            print(f"  SPF  : {spf['record'][:110]}  (lookup: {spf.get('lookups', 0)})")
+        else:
+            print("  SPF  : нет [!]")
+        dmarc = email.get("dmarc") or {}
+        print(f"  DMARC: {dmarc.get('policy') or 'нет [!]'}")
+        print(f"  DKIM : {_osint_value(email.get('dkim'))}")
+
+    subdomains = result.get("subdomains") or []
+    if subdomains:
+        passive = sum(1 for sub in subdomains if sub.get("source") == "passive")
+        print(f"\nПОДДОМЕНЫ ({len(subdomains)}; crt.sh/пассивные {passive}, wordlist {len(subdomains) - passive})")
+
+        new_names = sorted(
+            sub["subdomain"] for sub in subdomains
+            if previous_names and sub["subdomain"] not in previous_names
+        )
+        if previous_names:
+            if new_names:
+                print(f"  новых с прошлого скана: {len(new_names)} — {', '.join(new_names[:10])}")
+            else:
+                print("  новых с прошлого скана: нет")
+
+        for sub in sorted(subdomains, key=lambda item: item.get("subdomain") or ""):
+            info = sub.get("http") or {}
+            parts = [sub.get("subdomain", "?")]
+            if info:
+                parts.append(str(info.get("status", "-")))
+                if info.get("server"):
+                    parts.append(info["server"])
+                if info.get("title"):
+                    parts.append(f"«{info['title']}»")
+                if info.get("tls_days_left") is not None:
+                    parts.append(f"TLS {info['tls_days_left']} дн.")
+            elif sub.get("cname"):
+                parts.append(f"CNAME {sub['cname']}")
+            if sub.get("takeover"):
+                parts.append("[!] takeover-кандидат")
+            print("  " + "  ".join(parts))
+    else:
+        print("\nПоддомены: не найдены")
+
+    findings = result.get("findings") or []
+    print(f"\nНАХОДКИ: {len(findings)}")
+    for finding in findings:
+        severity = str(finding.get("severity", "?")).upper()
+        print(f"  [{severity:8}] {finding.get('title')}")
+        if finding.get("detail"):
+            print(f"             {finding['detail']}")
+        if finding.get("fix"):
+            print(f"             fix: {finding['fix']}")
+
+
 def cmd_osint(args):
-    result = asyncio.run(api.run_osint_report(args.domain))
+    sources = [item.strip() for item in args.sources.split(",") if item.strip()]
+    unknown = set(sources) - {"crt", "wordlist", "hackertarget"}
+    if unknown:
+        print(f"[-] Неизвестные источники: {', '.join(sorted(unknown))}")
+        print("    допустимо: crt, wordlist, hackertarget")
+        return 2
+
+    if args.wordlist and not os.path.isfile(args.wordlist):
+        print(f"[-] Файл словаря не найден: {args.wordlist}")
+        return 1
+
+    result = asyncio.run(api.run_osint_report(
+        args.domain,
+        wordlist_path=args.wordlist,
+        active=args.active,
+        sources=sources,
+        concurrency=args.concurrency,
+        use_cache=not args.no_cache,
+    ))
     if not result or "error" in result:
         print(f"[-] {result.get('error', 'пустой результат')}")
         return 1
 
-    whois_data = result.get("whois", {})
-    registrar = whois_data.get("registrar") or whois_data.get("registrar_name") or "Неизвестно"
-    subdomains = result.get("subdomains", [])
-    database.save_osint_result(result.get("scan_time") or _now(),
-                               result.get("domain", args.domain), registrar, len(subdomains))
+    domain = result.get("domain", args.domain)
+    previous_names = database.get_previous_osint_subdomains(domain)
+    _print_osint(result, previous_names)
 
-    print(f"Домен: {result.get('domain', args.domain)}")
-    print(f"Время: {result.get('scan_time', '-')}")
-    if whois_data:
-        print("\nWHOIS:")
-        for k, v in whois_data.items():
-            print(f"  {k}: {v}")
-    dns_data = result.get("dns", {})
-    if dns_data:
-        print("\nDNS:")
-        for rtype, ips in dns_data.items():
-            print(f"  {rtype}: {', '.join(ips) if isinstance(ips, list) else ips}")
-    print(f"\nПоддомены ({len(subdomains)}):")
-    for sub in subdomains:
-        if isinstance(sub, dict):
-            print(f"  {sub.get('subdomain')} -> {sub.get('ip')}")
-        else:
-            print(f"  {sub}")
+    whois = result.get("whois") or {}
+    # Кэш не создаёт новую запись: иначе один и тот же отчёт копится в истории
+    if not result.get("cached"):
+        database.save_osint_result(
+            result.get("scan_time") or _now(),
+            domain,
+            whois.get("registrar") or "Неизвестно",
+            len(result.get("subdomains") or []),
+            expires_at=whois.get("expiration_date"),
+            findings_count=len(result.get("findings") or []),
+            subdomains=result.get("subdomains") or [],
+        )
+
+    if args.json:
+        Path(args.json).write_text(
+            json.dumps(result, ensure_ascii=False, indent=2, default=str), encoding="utf-8")
+        print(f"\n[+] JSON сохранён: {args.json}")
+    if args.report:
+        print(f"[+] Отчёт сохранён: {api.save_osint_report(result)}")
     return 0
 
 
@@ -193,11 +346,39 @@ def cmd_web(args):
 
 def cmd_pipeline(args):
     result = asyncio.run(api.run_combined_pipeline(
-        args.domain, ports=args.ports, host_concurrency=args.concurrency))
+        args.domain, ports=args.ports, host_concurrency=args.concurrency,
+        scan=getattr(args, "scan", False)))
     if "error" in result:
         print(f"[-] {result['error']}")
         return 1
-    _dump(result)
+
+    osint = result.get("osint") or {}
+    subdomains = osint.get("subdomains") or []
+    print(f"\nДомен: {result.get('domain')}  ({len(subdomains)} поддоменов)")
+    print(f"Находки OSINT: {len(osint.get('findings') or [])}")
+    for finding in (osint.get("findings") or [])[:10]:
+        print(f"  [{finding.get('severity', '?').upper():8}] {finding.get('title')}")
+
+    if not getattr(args, "scan", False):
+        print("\nПорты не сканировались. Добавьте --scan, если это ваша инфраструктура.")
+    else:
+        scan_results = result.get("scan_results") or {}
+        total_ports = sum(1 for results in scan_results.values() for r in results if r.status == "open")
+        print(f"\nПросканировано хостов: {len(scan_results)}, открытых портов: {total_ports}")
+        for ip, results in scan_results.items():
+            open_ports = [r for r in results if r.status == "open"]
+            if open_ports:
+                print(f"  {ip}: " + ", ".join(f"{r.port}/{r.service}" for r in open_ports))
+        findings = result.get("findings") or []
+        print(f"Находки по портам: {len(findings)}")
+        for f in findings[:15]:
+            print(f"  [{str(f.get('severity', '?')).upper():8}] {f.get('host')}:{f.get('port')} "
+                  f"{f.get('title')}")
+
+    if args.json:
+        Path(args.json).write_text(
+            json.dumps(result, ensure_ascii=False, indent=2, default=str), encoding="utf-8")
+        print(f"\n[+] JSON сохранён: {args.json}")
     return 0
 
 
@@ -208,7 +389,13 @@ def cmd_vault(args):
         return 0
 
     password = getpass.getpass("Мастер-пароль: ")
-    if not api.vault_unlock(password):
+    try:
+        unlocked = api.vault_unlock(password)
+    except RuntimeError as exc:
+        # например, потерян .salt: это не «неверный пароль»
+        print(f"[-] {exc}")
+        return 1
+    if not unlocked:
         print("[-] Неверный пароль")
         return 1
     try:
@@ -249,7 +436,20 @@ def cmd_history(args):
         if not rows:
             print("  (пусто)")
         for row in rows:
-            print("  " + " | ".join(f"{c}={v}" for c, v in zip(cols, row)))
+            data = dict(zip(cols, row))
+            if table == "osint_results":
+                expiry = data.get("expires_at") or "?"
+                print(f"  {data.get('scan_time')}  {data.get('target_domain')}  "
+                      f"{data.get('registrar')}  поддоменов: {data.get('subdomains_count')}  "
+                      f"находок: {data.get('findings_count', 0)}  истекает: {expiry}")
+            elif table == "dlp_results":
+                print(f"  {data.get('scan_time')}  {data.get('checked_path')}  "
+                      f"крит: {data.get('critical_count')}  выс: {data.get('high_count', 0)}  "
+                      f"средн: {data.get('medium_count')}  низк: {data.get('low_count')}")
+            else:
+                print(f"  {data.get('scan_time')}  {data.get('target')}  "
+                      f"портов: {data.get('open_ports_count')}  "
+                      f"уязвимостей: {data.get('vulnerabilities_count')}")
             if table == "network_results":
                 cursor.execute(
                     "SELECT host, port, vulnerability_title, severity FROM network_details "
@@ -379,8 +579,8 @@ MAIN_EPILOG = """\
   perimeter dlp ~/project --report
   perimeter scan 192.168.1.10 --ports 22,80,8000-8100
   perimeter scan 10.0.0.0/24 --report
-  perimeter osint example.com
-  perimeter pipeline example.com --concurrency 20
+  perimeter osint example.com --active --report
+  perimeter pipeline example.com --scan --concurrency 20
   perimeter web 192.168.1.10 --port 4280 --cookie session=abc
   perimeter vault save github_token
   perimeter history --limit 10
@@ -417,15 +617,22 @@ def build_parser():
         sub, "dlp", "DLP-скан папки на утечки секретов",
         "Ищет в файлах папки приватные ключи SSH, токены (AWS, GitHub, OpenAI,\n"
         "Telegram), JWT и пароли. Находки обогащаются описанием и рекомендацией\n"
-        "из базы знаний. Итог пишется в историю (таблица dlp_results).",
+        "из базы знаний. Итог пишется в историю (таблица dlp_results).\n"
+        "--git добавляет проверку истории: секреты, удалённые из кода, но\n"
+        "оставшиеся в прошлых коммитах (их видит каждый, у кого есть клон).",
         "Примеры:\n"
         "  perimeter dlp ~/project\n"
-        "  perimeter dlp C:\\project --report",
+        "  perimeter dlp . --git --report\n"
+        "  perimeter dlp . --git --git-depth 5000 --show-secrets",
     )
     p.add_argument("path", metavar="PATH", help="папка для сканирования")
     p.add_argument("--report", action="store_true", help="сохранить JSON/TXT отчёт в ./reports")
     p.add_argument("--show-secrets", action="store_true",
                    help="печатать и сохранять секреты полностью (по умолчанию маскируются)")
+    p.add_argument("--git", action="store_true",
+                   help="проверить историю git: секреты в прошлых коммитах")
+    p.add_argument("--git-depth", metavar="N", type=int, default=1000,
+                   help="сколько последних коммитов проверять (по умолчанию 1000)")
     p.set_defaults(func=cmd_dlp)
 
     p = _add(
@@ -445,22 +652,41 @@ def build_parser():
     p.set_defaults(func=cmd_scan)
 
     p = _add(
-        sub, "osint", "WHOIS + DNS + перебор поддоменов",
-        "Собирает WHOIS и DNS-записи домена, затем перебирает поддомены по\n"
-        "wordlist. Итог пишется в историю (таблица osint_results).",
+        sub, "osint", "WHOIS + DNS + поддомены + проверки конфигурации",
+        "Разведка домена: WHOIS, DNS (A/AAAA/MX/TXT/NS/SOA/CNAME/CAA/DS),\n"
+        "поддомены из crt.sh (Certificate Transparency) и wordlist, проверки\n"
+        "SPF/DMARC/DKIM/DNSSEC/CAA. По умолчанию — только пассивные источники.\n"
+        "Свой словарь: --wordlist PATH или PERIMETER_WORDLIST=...\n"
+        "Итог пишется в историю (таблицы osint_results, osint_subdomains).",
         "Примеры:\n"
-        "  perimeter osint example.com",
+        "  perimeter osint example.com\n"
+        "  perimeter osint example.com --report --json out.json\n"
+        "  perimeter osint example.com --active\n"
+        "  perimeter osint example.com --sources crt,wordlist,hackertarget",
     )
     p.add_argument("domain", metavar="DOMAIN", help="домен для разведки")
+    p.add_argument("--active", action="store_true",
+                   help="активные проверки: AXFR, HTTP/TLS-проба, subdomain takeover")
+    p.add_argument("--sources", metavar="LIST", default="crt,wordlist",
+                   help="источники поддоменов: crt,wordlist,hackertarget (по умолчанию crt,wordlist)")
+    p.add_argument("--concurrency", metavar="N", type=int, default=50,
+                   help="параллельных DNS-запросов (по умолчанию 50)")
+    p.add_argument("--wordlist", metavar="PATH",
+                   help="свой список поддоменов (по умолчанию встроенный или SecLists)")
+    p.add_argument("--no-cache", action="store_true", help="не использовать кэш (TTL 24 ч)")
+    p.add_argument("--json", metavar="PATH", help="сохранить полный отчёт в JSON")
+    p.add_argument("--report", action="store_true", help="сохранить JSON-отчёт в ./reports")
     p.set_defaults(func=cmd_osint)
 
     p = _add(
-        sub, "web", "аудит веб-уязвимостей (L7)",
-        "Аудит веб-приложения: заголовки безопасности, чувствительные пути и\n"
-        "прочие проверки L7. Cookie нужны, если приложение за авторизацией.",
+        sub, "web", "веб-проверки для учебного стенда DVWA",
+        "Проверки XSS, CSRF, brute force, file upload и open redirect по путям\n"
+        "DVWA (/vulnerabilities/...). На обычном приложении эти пути дадут 404:\n"
+        "модуль предназначен для стенда DVWA, а не для аудита любого сайта.\n"
+        "Cookie нужны, если приложение за авторизацией.",
         "Примеры:\n"
         "  perimeter web 192.168.1.10\n"
-        "  perimeter web 192.168.1.10 --port 8080 --cookie session=abc",
+        "  perimeter web 192.168.1.10 --port 8080 --cookie PHPSESSID=abc",
     )
     p.add_argument("target", metavar="TARGET", help="IP или хост веб-приложения")
     p.add_argument("--port", metavar="PORT", type=int, default=4280,
@@ -471,18 +697,23 @@ def build_parser():
     p.set_defaults(func=cmd_web)
 
     p = _add(
-        sub, "pipeline", "OSINT -> скан портов всех найденных хостов -> обогащение",
-        "Сквозной сценарий: разведка домена, скан портов каждого найденного\n"
-        "хоста и обогащение находок из базы знаний. Печатает JSON.",
+        sub, "pipeline", "OSINT домена и (по желанию) скан его хостов",
+        "Сквозной сценарий: разведка домена, затем по флагу --scan — скан портов\n"
+        "всех найденных хостов с обогащением находок из базы знаний.\n"
+        "Без --scan порты не сканируются: IP за CDN принадлежат провайдеру, а не\n"
+        "владельцу домена.",
         "Примеры:\n"
         "  perimeter pipeline example.com\n"
-        "  perimeter pipeline example.com --ports 22,80,443 --concurrency 20",
+        "  perimeter pipeline example.com --scan --ports 22,80,443 --json out.json",
     )
     p.add_argument("domain", metavar="DOMAIN", help="домен для разведки")
+    p.add_argument("--scan", action="store_true",
+                   help="сканировать порты найденных хостов (только с разрешения владельца)")
     p.add_argument("--ports", metavar="PORTS", type=_ports_arg,
                    help="порты для скана (по умолчанию — топ портов)")
     p.add_argument("--concurrency", metavar="N", type=int, default=10,
                    help="сколько хостов сканировать одновременно (по умолчанию 10)")
+    p.add_argument("--json", metavar="PATH", help="сохранить полный отчёт в JSON")
     p.set_defaults(func=cmd_pipeline)
 
     p = _add(
@@ -587,6 +818,12 @@ def main(argv=None):
     if not getattr(args, "func", None):
         parser.print_help()
         return 0
+    # Схему готовим перед выполнением, а не при импорте: -h должен работать
+    # и на read-only дереве, где рядом с кодом нельзя создать базу.
+    try:
+        database.init_db()
+    except Exception as ex:
+        print(f"[!] История сканов недоступна: {ex}")
     try:
         return args.func(args)
     except KeyboardInterrupt:

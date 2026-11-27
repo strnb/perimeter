@@ -1,8 +1,6 @@
-"""OSINT — WHOIS + DNS + перебор поддоменов (модуль Демьяна)."""
+"""OSINT — WHOIS + DNS + пассивные источники + проверки конфигурации."""
 
 import logging
-
-from .paths import DEFAULT_WORDLIST
 
 logger = logging.getLogger(__name__)
 
@@ -16,12 +14,16 @@ except ImportError:
 
 async def run_osint_report(
     domain: str,
-    wordlist_path: str = DEFAULT_WORDLIST,
+    wordlist_path: str = None,
+    **options,
 ) -> dict:
+    """options: active, sources, concurrency, use_cache, cache_dir."""
     if not _OSINT_AVAILABLE:
         return {"error": "OSINT module not available"}
     try:
-        return await run_osint(domain, wordlist_path=wordlist_path)
-    except Exception as e:
-        logger.error(f"run_osint_report error: {e}")
-        return {"error": str(e)}
+        return await run_osint(domain, wordlist_path=wordlist_path, **options)
+    except ValueError as exc:
+        return {"error": str(exc)}
+    except Exception as exc:
+        logger.error("run_osint_report error: %s", exc)
+        return {"error": str(exc)}

@@ -12,7 +12,7 @@ import asyncio
 import logging
 from typing import Dict, List, Optional, Set
 
-from .osint import run_osint, OSINTReport, _DEFAULT_WORDLIST
+from .osint import run_osint, OSINTReport
 from .port_scanner import scan_ports
 from .results import ScanResult
 from .vuln_signatures import match_vulnerabilities, VulnFinding
@@ -43,14 +43,18 @@ def _collect_targets(osint_report: OSINTReport, domain: str) -> Dict[str, Set[st
 
 async def osint_and_scan(
     domain: str,
-    wordlist_path: str = _DEFAULT_WORDLIST,
+    wordlist_path: Optional[str] = None,
     ports: Optional[List[int]] = None,
     host_concurrency: int = 10,
     enrich: bool = True,
+    scan: bool = False,
 ) -> dict:
     """
-    Полный пайплайн: OSINT по домену -> скан портов на всех живых хостах ->
+    Пайплайн: OSINT по домену -> (scan=True) скан портов на всех хостах ->
     (опционально) обогащение находками из vuln_signatures.
+
+    scan по умолчанию False: IP за CDN принадлежат провайдеру, а не владельцу
+    домена, и сканировать их без разрешения нельзя.
 
     Возвращает единый словарь:
     {
@@ -64,7 +68,7 @@ async def osint_and_scan(
     logger.info(f"[pipeline] Запуск OSINT для {domain}")
     osint_report = await run_osint(domain, wordlist_path)
 
-    targets = _collect_targets(osint_report, domain)
+    targets = _collect_targets(osint_report, domain) if scan else {}
     logger.info(f"[pipeline] Найдено {len(targets)} уникальных живых хостов для скана")
 
     sem = asyncio.Semaphore(host_concurrency)

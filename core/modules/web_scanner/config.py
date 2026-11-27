@@ -38,19 +38,4 @@ DVWA = WebTarget(
     redirect_param="redirect",
 )
 
-GENERIC = WebTarget(
-    name="Generic",
-    xss_path="/search",
-    xss_param="q",
-    csrf_path="/account/settings",
-    login_path="/login",
-    login_user_param="username",
-    login_pass_param="password",
-    login_submit_param=None,
-    upload_path=None,
-    upload_file_param=None,
-    redirect_path="/redirect",
-    redirect_param="url",
-)
-
 ACTIVE_PROFILE = DVWA

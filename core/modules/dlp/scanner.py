@@ -95,7 +95,8 @@ def read_text(path: Path, stats: dict) -> tuple[bytes, str] | None:
 SEVERITY_ORDER = {"critical": 0, "high": 1, "medium": 2, "low": 3}
 
 
-def run_scan(root: str, stats: dict | None = None) -> list[dict]:
+def run_scan(root: str, stats: dict | None = None, git_history: bool = False,
+             git_depth: int = 0) -> list[dict]:
     if stats is None:
         stats = {}
     stats.setdefault("scanned", 0)
@@ -136,4 +137,44 @@ def run_scan(root: str, stats: dict | None = None) -> list[dict]:
 
     unique.sort(key=lambda f: (SEVERITY_ORDER.get(f.severity, 9), f.file, f.line))
     stats["yara_failed"] = rules_failed()
-    return [f.to_dict() for f in unique]
+
+    results = []
+    for finding in unique:
+        entry = finding.to_dict()
+        entry["source"] = "fs"
+        results.append(entry)
+
+    if git_history:
+        from .git_history import DEFAULT_DEPTH, repo_root, scan_git_history
+
+        git_findings = scan_git_history(root, depth=git_depth or DEFAULT_DEPTH, stats=stats)
+
+        # Пути в диффе относительны корня репозитория, а находки файловой
+        # системы — абсолютные. Приводим к общему виду, чтобы не дублировать
+        # секрет, который до сих пор лежит в файле.
+        base = Path(repo_root(root) or root).resolve()
+
+        def relative(path_value: str) -> str:
+            try:
+                return Path(path_value).resolve().relative_to(base).as_posix()
+            except (ValueError, OSError):
+                return Path(path_value).as_posix()
+
+        present = {(item["type"], item["value"], relative(item["file"])): item
+                   for item in results}
+        for git_finding in git_findings:
+            key = (git_finding["type"], git_finding["value"], git_finding["file"])
+            if key in present:
+                present[key].update({
+                    "also_in_git": True,
+                    "commit": git_finding["commit"],
+                    "date": git_finding["date"],
+                    "subject": git_finding["subject"],
+                    "commits": git_finding["commits"],
+                })
+            else:
+                results.append(git_finding)
+
+    results.sort(key=lambda item: (SEVERITY_ORDER.get(item["severity"], 9),
+                                   item.get("file") or "", item.get("line") or 0))
+    return results

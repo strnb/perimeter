@@ -86,14 +86,16 @@ def generate_pdf_report(target_pdf_path):
         total_osint, total_subdomains = 0, 0
 
     try:
-        cursor.execute("SELECT COUNT(*), SUM(critical_count), SUM(medium_count), SUM(low_count) FROM dlp_results")
+        cursor.execute("SELECT COUNT(*), SUM(critical_count), SUM(high_count), "
+                       "SUM(medium_count), SUM(low_count) FROM dlp_results")
         dlp_stats = cursor.fetchone()
         total_dlp = dlp_stats[0] if dlp_stats[0] else 0
         dlp_critical = dlp_stats[1] if dlp_stats[1] else 0
-        dlp_medium = dlp_stats[2] if dlp_stats[2] else 0
-        dlp_low = dlp_stats[3] if dlp_stats[3] else 0
-    except:
-        total_dlp, dlp_critical, dlp_medium, dlp_low = 0, 0, 0, 0
+        dlp_high = dlp_stats[2] if dlp_stats[2] else 0
+        dlp_medium = dlp_stats[3] if dlp_stats[3] else 0
+        dlp_low = dlp_stats[4] if dlp_stats[4] else 0
+    except Exception:
+        total_dlp, dlp_critical, dlp_high, dlp_medium, dlp_low = 0, 0, 0, 0, 0
 
     try:
         cursor.execute("SELECT COUNT(*), SUM(open_ports_count), SUM(vulnerabilities_count) FROM network_results")
@@ -140,7 +142,7 @@ def generate_pdf_report(target_pdf_path):
     stats_data = [
         stats_headers,
         [Paragraph("Внешняя разведка (OSINT)", table_cell_style), Paragraph(str(total_osint), table_cell_style), Paragraph(f"Найдено поддоменов в сумме: {total_subdomains}", table_cell_style)],
-        [Paragraph("Мониторинг утечек (DLP)", table_cell_style), Paragraph(str(total_dlp), table_cell_style), Paragraph(f"Критических: {dlp_critical} | Средних: {dlp_medium} | Низких: {dlp_low}", table_cell_style)],
+        [Paragraph("Мониторинг утечек (DLP)", table_cell_style), Paragraph(str(total_dlp), table_cell_style), Paragraph(f"Критических: {dlp_critical} | Высоких: {dlp_high} | Средних: {dlp_medium} | Низких: {dlp_low}", table_cell_style)],
         [Paragraph("Сетевой анализатор (Network)", table_cell_style), Paragraph(str(total_net), table_cell_style), Paragraph(f"Открытых портов: {net_ports} | Уязвимостей: {net_vulns}", table_cell_style)]
     ]
     stats_table = Table(stats_data, colWidths=[180, 120, 200])
@@ -158,9 +160,10 @@ def generate_pdf_report(target_pdf_path):
     story.append(Paragraph("Подсистема OSINT осуществляет сбор информации из открытых источников без прямого воздействия на объект.", body_style))
     
     try:
-        cursor.execute("SELECT scan_time, target_domain, registrar, subdomains_count FROM osint_results ORDER BY id DESC LIMIT 5")
+        cursor.execute("SELECT scan_time, target_domain, registrar, subdomains_count, "
+                       "expires_at, findings_count FROM osint_results ORDER BY id DESC LIMIT 5")
         osint_data = cursor.fetchall()
-    except:
+    except Exception:
         osint_data = []
 
     if osint_data:
@@ -168,17 +171,21 @@ def generate_pdf_report(target_pdf_path):
             Paragraph("Время сканирования", table_header_style), 
             Paragraph("Целевой домен", table_header_style), 
             Paragraph("Регистратор", table_header_style), 
-            Paragraph("Кол-во поддоменов", table_header_style)
+            Paragraph("Поддоменов", table_header_style),
+            Paragraph("Находок", table_header_style),
+            Paragraph("Домен истекает", table_header_style)
         ]]
         for row in osint_data:
             table_data.append([
                 Paragraph(escape(str(row[0])), table_cell_style), 
                 Paragraph(escape(str(row[1])), table_cell_style), 
                 Paragraph(escape(str(row[2])), table_cell_style), 
-                Paragraph(escape(str(row[3])), table_cell_style)
+                Paragraph(escape(str(row[3])), table_cell_style),
+                Paragraph(escape(str(row[5] if row[5] is not None else 0)), table_cell_style),
+                Paragraph(escape(str(row[4] if row[4] else "-")), table_cell_style)
             ])
         
-        t = Table(table_data, colWidths=[120, 130, 150, 100])
+        t = Table(table_data, colWidths=[105, 105, 110, 55, 50, 75])
         t.setStyle(TableStyle([
             ('BACKGROUND', (0,0), (-1,0), colors.HexColor("#130f22")),
             ('GRID', (0,0), (-1,-1), 0.5, colors.HexColor("#e0e0e0")),
@@ -203,9 +210,10 @@ def generate_pdf_report(target_pdf_path):
     story.append(Paragraph("Модуль DLP предназначен для локального мониторинга исходного кода и конфигурационных файлов проекта на наличие секретов.", body_style))
     
     try:
-        cursor.execute("SELECT scan_time, checked_path, critical_count, medium_count, low_count FROM dlp_results ORDER BY id DESC LIMIT 5")
+        cursor.execute("SELECT scan_time, checked_path, critical_count, high_count, "
+                       "medium_count, low_count FROM dlp_results ORDER BY id DESC LIMIT 5")
         dlp_data = cursor.fetchall()
-    except:
+    except Exception:
         dlp_data = []
     
     if dlp_data:
@@ -213,6 +221,7 @@ def generate_pdf_report(target_pdf_path):
             Paragraph("Время", table_header_style), 
             Paragraph("Сканируемый путь", table_header_style), 
             Paragraph("Крит.", table_header_style), 
+            Paragraph("Выс.", table_header_style), 
             Paragraph("Средн.", table_header_style), 
             Paragraph("Низк.", table_header_style)
         ]]
@@ -222,10 +231,11 @@ def generate_pdf_report(target_pdf_path):
                 Paragraph(escape(str(row[1])), table_cell_style), 
                 Paragraph(escape(str(row[2])), table_cell_style), 
                 Paragraph(escape(str(row[3])), table_cell_style), 
-                Paragraph(escape(str(row[4])), table_cell_style)
+                Paragraph(escape(str(row[4])), table_cell_style), 
+                Paragraph(escape(str(row[5])), table_cell_style)
             ])
             
-        t = Table(table_data, colWidths=[110, 210, 60, 60, 60])
+        t = Table(table_data, colWidths=[110, 190, 50, 50, 50, 50])
         t.setStyle(TableStyle([
             ('BACKGROUND', (0,0), (-1,0), colors.HexColor("#251b45")),
             ('GRID', (0,0), (-1,-1), 0.5, colors.HexColor("#e0e0e0")),

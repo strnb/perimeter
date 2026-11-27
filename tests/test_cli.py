@@ -1,10 +1,14 @@
 """Smoke-тесты CLI: python tests/test_cli.py (без pytest, на assert'ах)."""
 import argparse
+import asyncio
 import contextlib
 import io
+import os
 import sys
 import tempfile
 from pathlib import Path
+
+from types import SimpleNamespace
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
@@ -117,6 +121,15 @@ def test_vault(tmp: Path):
     vault.lock()
     assert not vault.unlock("wrong-pass")
 
+    # потеря .salt: секреты не расшифровать, но новый salt не создаётся молча
+    (master.VAULT_DIR / ".salt").unlink()
+    vault.lock()
+    try:
+        vault.unlock("test-master-pass")
+        raise AssertionError("потеря .salt должна давать ошибку, а не новый ключ")
+    except RuntimeError as exc:
+        assert ".salt" in str(exc)
+
 
 def test_reports_and_enrichment():
     # обогащение из базы знаний
@@ -209,6 +222,27 @@ def test_network_db_and_signatures(tmp: Path):
         port_scanner.check_tomcat_default_creds = original
     assert banner.startswith("VULNERABLE"), banner
 
+    # SMB: подтверждён протокол, а не уязвимость
+    original_smb = port_scanner.check_smb_ghost
+
+    async def fake_smb(host, port):
+        return {"status": "open", "vulnerable": False, "smb_confirmed": True,
+                "detail": "SMB Negotiate подтверждён, данные: 'WORKGROUP'"}
+
+    port_scanner.check_smb_ghost = fake_smb
+    try:
+        _, banner = asyncio.run(port_scanner._identify_service("h", 445))
+    finally:
+        port_scanner.check_smb_ghost = original_smb
+    assert "VULNERABLE" not in banner and "SMB Negotiate" in banner, banner
+
+    # два отчёта подряд не затирают друг друга
+    report_a = api.save_report([{"type": "a", "severity": "high"}], str(tmp / "reports"))
+    report_b = api.save_report([{"type": "b", "severity": "low"}], str(tmp / "reports"))
+    assert report_a != report_b, report_a
+    assert "a" in Path(report_a[0]).read_text(encoding="utf-8")
+    assert "b" in Path(report_b[0]).read_text(encoding="utf-8")
+
 
 def test_web_checks_and_dns(tmp: Path):
     import asyncio
@@ -226,20 +260,24 @@ def test_web_checks_and_dns(tmp: Path):
     assert finding and finding.vuln_type == "Open HTTP Redirect", "307 + слеш в Location"
 
     # wildcard DNS: все имена резолвятся в один IP — это шум, а не поддомены
+    from types import SimpleNamespace
     from core.modules.scanner import osint
     wordlist = tmp / "words.txt"
     wordlist.write_text("www\nmail\n", encoding="utf-8")
 
-    async def fake_resolve(full, semaphore, resolver):
-        ip = "5.6.7.8" if full.startswith("www.") else "1.2.3.4"
-        return {"subdomain": full, "ip": ip}
+    class FakeDNS:
+        async def query_status(self, name, rtype):
+            records = await self.query(name, rtype)
+            return records, bool(records)
 
-    original = osint._resolve_subdomain
-    osint._resolve_subdomain = fake_resolve
-    try:
-        found = asyncio.run(osint.find_subdomains("example.com", str(wordlist)))
-    finally:
-        osint._resolve_subdomain = original
+        async def query(self, name, rtype):
+            if rtype != "A":
+                return []
+            ip = "1.2.3.4" if ("wildcard" in name or name.startswith("mail.")) else "5.6.7.8"
+            return [SimpleNamespace(address=ip)]
+
+    found = asyncio.run(osint.find_subdomains(
+        "example.com", str(wordlist), dns_client=FakeDNS()))
     assert [f["subdomain"] for f in found] == ["www.example.com"], found
 
 
@@ -254,6 +292,56 @@ def test_resource_fallback(tmp: Path):
         assert found == tmp / "knowledge_base" / "x.json", found
     finally:
         paths.INSTALLED_ROOT = old
+
+
+def test_wordlist_and_speed(tmp: Path):
+    from core.modules.scanner import osint
+
+    # внешний словарь через env подхватывается по умолчанию
+    custom = tmp / "custom.txt"
+    custom.write_text("www\n# комментарий\nmail\nbad name\n", encoding="utf-8")
+    # BOM из Windows не должен съедать первую строку
+    bom = tmp / "bom.txt"
+    bom.write_bytes("\ufeffwww\nmail\n".encode("utf-8"))
+    old_env = os.environ.get(osint.WORDLIST_ENV)
+    os.environ[osint.WORDLIST_ENV] = str(custom)
+    try:
+        assert osint.default_wordlist() == str(custom)
+        assert osint._read_wordlist(str(custom)) == ["www", "mail"], osint._read_wordlist(str(custom))
+        assert osint._read_wordlist(str(bom)) == ["www", "mail"], osint._read_wordlist(str(bom))
+    finally:
+        if old_env is None:
+            os.environ.pop(osint.WORDLIST_ENV, None)
+        else:
+            os.environ[osint.WORDLIST_ENV] = old_env
+
+    # встроенный словарь непустой и без дублей
+    assert os.path.getsize(osint._DEFAULT_WORDLIST) > 5000
+    bundled = osint._read_wordlist(osint._DEFAULT_WORDLIST)
+    assert len(bundled) > 1000 and len(bundled) == len(set(bundled)), len(bundled)
+
+    # CNAME спрашивается и при наличии A: висячий CNAME резолвится через CDN
+    calls = []
+
+    class CountingDNS:
+        async def query_status(self, name, rtype):
+            calls.append((name, rtype))
+            if name.startswith("has-a."):
+                return ([SimpleNamespace(address="1.1.1.1")] if rtype == "A" else []), True
+            return [], True
+
+        async def query(self, name, rtype):
+            records, _ = await self.query_status(name, rtype)
+            return records
+
+    result = asyncio.run(osint._resolve_host("has-a.example.com", CountingDNS(), asyncio.Semaphore(1)))
+    assert calls == [("has-a.example.com", "A"), ("has-a.example.com", "CNAME")], calls
+    assert result["ips"] == ["1.1.1.1"]
+
+    calls.clear()
+    asyncio.run(osint._resolve_host("no-a.example.com", CountingDNS(), asyncio.Semaphore(1)))
+    assert calls == [("no-a.example.com", "A"), ("no-a.example.com", "AAAA"),
+                     ("no-a.example.com", "CNAME")], calls
 
 
 def test_help_and_completion():
@@ -296,4 +384,6 @@ if __name__ == "__main__":
         test_resource_fallback(Path(d))
     with tempfile.TemporaryDirectory() as d:
         test_web_checks_and_dns(Path(d))
+    with tempfile.TemporaryDirectory() as d:
+        test_wordlist_and_speed(Path(d))
     print("OK: все проверки пройдены")

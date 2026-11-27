@@ -17,6 +17,13 @@ def _get_or_create_salt() -> bytes:
     master.VAULT_DIR.mkdir(exist_ok=True)
     salt_file = _salt_file()
     if not salt_file.exists():
+        # .master есть, а соли нет: секреты зашифрованы ключом, выведенным из
+        # потерянной соли. Новый salt сделает их нечитаемыми навсегда.
+        if master.MASTER_FILE.exists():
+            raise RuntimeError(
+                "Потерян файл .salt рядом с .master — без него секреты не расшифровать. "
+                "Восстановите .salt из резервной копии."
+            )
         # 'xb' — создать только если файла ещё нет: два процесса не перезапишут соль
         try:
             with open(salt_file, "xb") as f:

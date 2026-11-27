@@ -1,12 +1,29 @@
 [build-system]
-requires = ["setuptools>=61"]
+requires = ["setuptools>=77"]
 build-backend = "setuptools.build_meta"
 
 [project]
 name = "perimeter"
 version = "1.0.0"
 description = "Терминальный комплекс аудита безопасности: DLP, сканер портов, OSINT, web-аудит, crypto vault, отчёты"
+readme = "README.md"
 requires-python = ">=3.10"
+license = "MIT"
+license-files = ["LICENSE"]
+authors = [{ name = "EvdokimovAD" }]
+keywords = ["security", "audit", "dlp", "osint", "port-scanner", "cli"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Environment :: Console",
+    "Intended Audience :: System Administrators",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Security",
+]
 dependencies = [
     "yara-python",
     "cryptography",

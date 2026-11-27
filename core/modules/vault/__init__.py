@@ -8,9 +8,10 @@ def unlock(password: str) -> bool:
     global _session_key
     from .cipher import derive_key
     if not is_vault_initialized():
-        # Первый запуск — сохранить пароль и создать ключ
-        save_master_hash(password)
+        # Сначала ключ (он создаёт .salt), потом .master: иначе проверка
+        # «есть .master, нет .salt» сработает на своём же первом запуске
         _session_key = derive_key(password)
+        save_master_hash(password)
         return True
     if verify_password(password):
         _session_key = derive_key(password)

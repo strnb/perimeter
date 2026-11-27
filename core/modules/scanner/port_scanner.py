@@ -120,10 +120,10 @@ async def _identify_service(host: str, port: int) -> tuple[str, Optional[str]]:
             return "postgresql", "open"
 
         elif port in (445,139):
-            # Наш новый активный пробник для SMB / Samba
+            # Пробник подтверждает только протокол SMB, а не уязвимость
             res = await check_smb_ghost(host, port)
-            if res.get("vulnerable"):
-                return "smb", f"VULNERABLE: {res.get('detail')} | Banner: {res.get('banner')}"
+            if res.get("smb_confirmed"):
+                return "smb", f"SMB Negotiate: {res.get('detail', '')[:100]}"
             return "smb", "open"
 
         else:
