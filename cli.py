@@ -8,8 +8,10 @@ import difflib
 import getpass
 import json
 import os
+import json
 import sqlite3
 import sys
+from dataclasses import asdict, is_dataclass
 from datetime import datetime
 from pathlib import Path
 
@@ -344,6 +346,13 @@ def cmd_web(args):
     return 0
 
 
+def _jsonable(obj):
+    """JSON для --json: dataclass-результаты становятся объектами, не строками."""
+    if is_dataclass(obj) and not isinstance(obj, type):
+        return asdict(obj)
+    return str(obj)
+
+
 def cmd_pipeline(args):
     result = asyncio.run(api.run_combined_pipeline(
         args.domain, ports=args.ports, host_concurrency=args.concurrency,
@@ -377,7 +386,7 @@ def cmd_pipeline(args):
 
     if args.json:
         Path(args.json).write_text(
-            json.dumps(result, ensure_ascii=False, indent=2, default=str), encoding="utf-8")
+            json.dumps(result, ensure_ascii=False, indent=2, default=_jsonable), encoding="utf-8")
         print(f"\n[+] JSON сохранён: {args.json}")
     return 0
 

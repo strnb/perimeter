@@ -1,0 +1,37 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  test:
+    name: ${{ matrix.os }} / Python ${{ matrix.python }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+        python: ["3.10", "3.12"]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+
+      - name: Install
+        run: pip install -e .
+
+      - name: Docs
+        run: python tests/test_docs.py
+
+      - name: CLI and vault
+        run: python tests/test_cli.py
+
+      - name: DLP and git history
+        run: python tests/test_dlp.py
+
+      - name: OSINT
+        run: python tests/test_osint.py
