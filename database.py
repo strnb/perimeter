@@ -1,10 +1,16 @@
 import sqlite3
 import os
-from datetime import datetime
+
+from core.paths import app_data_dir
 
 CURRENT_DIR = os.path.dirname(os.path.abspath(__file__))
 
-DB_PATH = os.path.join(CURRENT_DIR, "perimeter.db")
+# В репозитории/editable-установке история лежит рядом с кодом, как раньше.
+# После обычного pip install site-packages только для чтения — уходим в ~/.perimeter.
+if os.path.isdir(os.path.join(CURRENT_DIR, "knowledge_base")):
+    DB_PATH = os.path.join(CURRENT_DIR, "perimeter.db")
+else:
+    DB_PATH = str(app_data_dir() / "perimeter.db")
 
 def init_db():
     """Гарантирует создание всех необходимых таблиц при старте приложения."""
@@ -50,6 +56,7 @@ def init_db():
     CREATE TABLE IF NOT EXISTS network_details (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         result_id INTEGER,
+        host TEXT,
         port INTEGER,
         service TEXT,
         banner TEXT,
@@ -58,6 +65,11 @@ def init_db():
         FOREIGN KEY(result_id) REFERENCES network_results(id) ON DELETE CASCADE
     )
     """)
+
+    # Миграция старых БД: без host в отчёте по подсети не видно, где найден порт
+    columns = {row[1] for row in cursor.execute("PRAGMA table_info(network_details)")}
+    if "host" not in columns:
+        cursor.execute("ALTER TABLE network_details ADD COLUMN host TEXT")
     
     conn.commit()
     conn.close()
@@ -93,9 +105,10 @@ def save_network_result(scan_time, target, open_ports_count, vulnerabilities_cou
     
     for detail in details:
         cursor.execute("""
-        INSERT INTO network_details (result_id, port, service, banner, vulnerability_title, severity)
-        VALUES (?, ?, ?, ?, ?, ?)
-        """, (result_id, detail['port'], detail['service'], detail['banner'], detail.get('vulnerability_title'), detail.get('severity')))
+        INSERT INTO network_details (result_id, host, port, service, banner, vulnerability_title, severity)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+        """, (result_id, detail.get('host'), detail['port'], detail['service'], detail['banner'],
+              detail.get('vulnerability_title'), detail.get('severity')))
         
     conn.commit()
     conn.close()

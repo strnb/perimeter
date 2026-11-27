@@ -24,7 +24,10 @@ async def scan_network(
     if not _SCANNER_AVAILABLE:
         return [{"error": "Scanner module not available"}]
 
-    scan_results = await scan_ports(target, ports=ports)
+    try:
+        scan_results = await scan_ports(target, ports=ports)
+    except ValueError as e:
+        return [{"error": str(e)}]
     vuln_findings = match_vulnerabilities(scan_results)
 
     findings_map: dict[tuple, list] = {}

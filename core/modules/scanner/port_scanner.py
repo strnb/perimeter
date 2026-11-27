@@ -22,6 +22,9 @@ DEFAULT_PORTS = [
     2121, 6000, 6667, 6697, 8009, 8180, 8787, 6200
 ]
 
+# Защита от опечатки в CIDR: больше этого числа проверок — отказ до первых пакетов
+MAX_TASKS = 65_536
+
 
 async def _identify_service(host: str, port: int) -> tuple[str, Optional[str]]:
     """Определяет сервис и запускает активные пробники безопасности на основе порта."""
@@ -81,7 +84,7 @@ async def _identify_service(host: str, port: int) -> tuple[str, Optional[str]]:
         elif port == 8180:
             # Специфичный порт Tomcat для Metasploitable 2
             res = await check_tomcat_default_creds(host, port)
-            if res.get("vulnerable"):
+            if res.get("weak_creds"):
                 return "http-tomcat", "VULNERABLE: дефолтные учётные данные tomcat:tomcat"
             return "http-tomcat", "open"
 
@@ -95,12 +98,16 @@ async def _identify_service(host: str, port: int) -> tuple[str, Optional[str]]:
             res = await check_mongo(host, port)
             if res.get("vulnerable"):
                 return "mongodb", "VULNERABLE: доступ без аутентификации"
+            if res.get("status") == "error":
+                return "mongodb", f"open (проверка слабых паролей недоступна: {res.get('reason')})"
             return "mongodb", "auth_required" if res.get("auth") else "open"
 
         elif port == 3306:
             res = await check_mysql_weak_creds(host, port)
             if res.get("vulnerable"):
                 return "mysql", f"VULNERABLE: обнаружены слабые учётные данные ({res.get('detail')})"
+            if res.get("status") == "error":
+                return "mysql", f"open (проверка слабых паролей недоступна: {res.get('reason')})"
             return "mysql", "open"
 
         elif port == 5432:
@@ -108,6 +115,8 @@ async def _identify_service(host: str, port: int) -> tuple[str, Optional[str]]:
             res = await check_postgres_weak_creds(host, port)
             if res.get("vulnerable"):
                 return "postgresql", f"VULNERABLE: обнаружены слабые учётные данные ({res.get('detail')})"
+            if res.get("status") == "error":
+                return "postgresql", f"open (проверка слабых паролей недоступна: {res.get('reason')})"
             return "postgresql", "open"
 
         elif port in (445,139):
@@ -169,9 +178,17 @@ async def scan_ports(target: str, ports: Optional[List[int]] = None, max_concurr
         logger.error(f"Некорректный целевой адрес или диапазон сети: {target} -> {e}")
         return []
 
+    # /8 × 65535 портов = сотни миллионов задач: проверяем до создания списков
+    total = len(hosts) * len(ports)
+    if total > MAX_TASKS:
+        raise ValueError(
+            f"Слишком большой объём скана: {len(hosts)} хостов × {len(ports)} портов "
+            f"= {total} проверок (лимит {MAX_TASKS}). Сузьте CIDR или список портов."
+        )
+
     semaphore = asyncio.Semaphore(max_concurrency)
     tasks = [scan_port(host, port, semaphore) for host in hosts for port in ports]
 
     logger.info(f"Запуск сканирования сети для {target}. Всего задач: {len(tasks)}")
-    results = await asyncio.gather(*tasks)
+    results = await asyncio.gather(*tasks) if tasks else []
     return [r for r in results if r.status == "open"]

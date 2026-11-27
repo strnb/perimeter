@@ -1,7 +1,6 @@
 """Пути проекта, общие для модулей api: корень, база знаний, wordlist."""
 
-from pathlib import Path
+from core.paths import resource_path
 
-ROOT = Path(__file__).resolve().parent.parent  # .../perimeter-cli
-KB_PATH = ROOT / "knowledge_base" / "vulnerabilities.json"
-DEFAULT_WORDLIST = str(ROOT / "core" / "subdomains_wordlist.txt")
+KB_PATH = resource_path("knowledge_base/vulnerabilities.json")
+DEFAULT_WORDLIST = str(resource_path("core/subdomains_wordlist.txt"))

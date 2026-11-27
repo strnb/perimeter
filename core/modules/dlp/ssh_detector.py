@@ -13,7 +13,7 @@ def detect_ssh(file: Path, lines: list[str]) -> list[Finding]:
                     severity="critical",
                     file=str(file),
                     line=line_number,
-                    kb_id="VULN-005",
+                    kb_id="VULN-039",
                     value=line.strip()[:40],
                 ))
 

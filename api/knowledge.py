@@ -11,14 +11,26 @@ _knowledge_base: list[dict] = []
 
 # type находки DLP -> id записи в базе знаний
 TYPE_TO_KB = {
-    "ssh_key":    "VULN-005",
-    "aws_key":    "VULN-007",
-    "aws_secret": "VULN-007",
-    "github":     "VULN-007",
-    "openai":     "VULN-007",
-    "telegram":   "VULN-007",
-    "jwt":        "VULN-007",
-    "password":   "VULN-006",
+    "ssh_key":           "VULN-039",
+    "aws_key":           "VULN-007",
+    "aws_secret":        "VULN-007",
+    "aws_credentials":   "VULN-007",
+    "github":            "VULN-007",
+    "gitlab":            "VULN-007",
+    "openai":            "VULN-007",
+    "stripe":            "VULN-007",
+    "slack":             "VULN-007",
+    "google":            "VULN-007",
+    "sendgrid":          "VULN-007",
+    "npm":               "VULN-007",
+    "digitalocean":      "VULN-007",
+    "telegram":          "VULN-007",
+    "jwt":               "VULN-007",
+    "generic_api_key":   "VULN-007",
+    "password":          "VULN-006",
+    "connection_string": "VULN-040",
+    "password_hash":     "VULN-041",
+    "secret_dump":       "VULN-042",
 }
 
 

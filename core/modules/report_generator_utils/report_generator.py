@@ -8,14 +8,16 @@ from reportlab.pdfbase.ttfonts import TTFont
 import os
 from pathlib import Path
 from datetime import datetime
+from xml.sax.saxutils import escape
 
-from database import DB_PATH
+import database
+from core.paths import resource_path
 
 def register_fonts():
     """Кроссплатформенная регистрация шрифта DejaVuSans с поддержкой кириллицы."""
     try:
-        # Пытаемся найти шрифт в папке assets относительно корня проекта
-        font_path = Path(__file__).resolve().parents[3] / "assets" / "DejaVuSans.ttf"
+        # assets рядом с пакетом или в share/perimeter после pip install
+        font_path = resource_path("assets/DejaVuSans.ttf")
         if not font_path.exists():
             # Альтернативный поиск от текущей рабочей директории
             font_path = Path("assets/DejaVuSans.ttf").resolve()
@@ -71,7 +73,7 @@ def generate_pdf_report(target_pdf_path):
     )
     
     # Подключаемся к БД
-    conn = sqlite3.connect(DB_PATH)
+    conn = sqlite3.connect(database.DB_PATH)
     cursor = conn.cursor()
     
     # Сбор статистики
@@ -170,10 +172,10 @@ def generate_pdf_report(target_pdf_path):
         ]]
         for row in osint_data:
             table_data.append([
-                Paragraph(str(row[0]), table_cell_style), 
-                Paragraph(str(row[1]), table_cell_style), 
-                Paragraph(str(row[2]), table_cell_style), 
-                Paragraph(str(row[3]), table_cell_style)
+                Paragraph(escape(str(row[0])), table_cell_style), 
+                Paragraph(escape(str(row[1])), table_cell_style), 
+                Paragraph(escape(str(row[2])), table_cell_style), 
+                Paragraph(escape(str(row[3])), table_cell_style)
             ])
         
         t = Table(table_data, colWidths=[120, 130, 150, 100])
@@ -216,11 +218,11 @@ def generate_pdf_report(target_pdf_path):
         ]]
         for row in dlp_data:
             table_data.append([
-                Paragraph(str(row[0]), table_cell_style), 
-                Paragraph(str(row[1]), table_cell_style), 
-                Paragraph(str(row[2]), table_cell_style), 
-                Paragraph(str(row[3]), table_cell_style), 
-                Paragraph(str(row[4]), table_cell_style)
+                Paragraph(escape(str(row[0])), table_cell_style), 
+                Paragraph(escape(str(row[1])), table_cell_style), 
+                Paragraph(escape(str(row[2])), table_cell_style), 
+                Paragraph(escape(str(row[3])), table_cell_style), 
+                Paragraph(escape(str(row[4])), table_cell_style)
             ])
             
         t = Table(table_data, colWidths=[110, 210, 60, 60, 60])
@@ -256,14 +258,15 @@ def generate_pdf_report(target_pdf_path):
     if network_data:
         for net_row in network_data:
             result_id, scan_time, target, open_ports, vulns = net_row
-            story.append(Paragraph(f"<b>Цель сканирования:</b> {target} | <b>Время:</b> {scan_time} | <b>Открытых портов:</b> {open_ports} | <b>Уязвимостей:</b> {vulns}", h2_style))
+            story.append(Paragraph(f"<b>Цель сканирования:</b> {escape(str(target))} | <b>Время:</b> {escape(str(scan_time))} | <b>Открытых портов:</b> {open_ports} | <b>Уязвимостей:</b> {vulns}", h2_style))
             story.append(Spacer(1, 4))
             
-            cursor.execute("SELECT port, service, banner, vulnerability_title, severity FROM network_details WHERE result_id = ?", (result_id,))
+            cursor.execute("SELECT host, port, service, banner, vulnerability_title, severity FROM network_details WHERE result_id = ?", (result_id,))
             details = cursor.fetchall()
             
             if details:
                 table_data = [[
+                    Paragraph("Хост", table_header_style), 
                     Paragraph("Порт", table_header_style), 
                     Paragraph("Служба", table_header_style), 
                     Paragraph("Баннер", table_header_style), 
@@ -271,16 +274,17 @@ def generate_pdf_report(target_pdf_path):
                     Paragraph("Риск", table_header_style)
                 ]]
                 for d_row in details:
-                    port, service, banner, vuln_title, severity = d_row
+                    host, port, service, banner, vuln_title, severity = d_row
                     table_data.append([
-                        Paragraph(str(port), table_cell_style), 
-                        Paragraph(str(service), table_cell_style), 
-                        Paragraph(str(banner if banner else "-"), table_cell_style), 
-                        Paragraph(str(vuln_title if vuln_title else "-"), table_cell_style), 
-                        Paragraph(str(severity if severity else "-"), table_cell_style)
+                        Paragraph(escape(str(host if host else "-")), table_cell_style), 
+                        Paragraph(escape(str(port)), table_cell_style), 
+                        Paragraph(escape(str(service)), table_cell_style), 
+                        Paragraph(escape(str(banner if banner else "-")), table_cell_style), 
+                        Paragraph(escape(str(vuln_title if vuln_title else "-")), table_cell_style), 
+                        Paragraph(escape(str(severity if severity else "-")), table_cell_style)
                     ])
                 
-                t = Table(table_data, colWidths=[50, 80, 120, 180, 70])
+                t = Table(table_data, colWidths=[75, 45, 70, 110, 140, 60])
                 t.setStyle(TableStyle([
                     ('BACKGROUND', (0,0), (-1,0), colors.HexColor("#393053")),
                     ('GRID', (0,0), (-1,-1), 0.5, colors.HexColor("#e0e0e0")),

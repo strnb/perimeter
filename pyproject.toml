@@ -16,6 +16,10 @@ dependencies = [
     "dnspython",
 ]
 
+[project.optional-dependencies]
+# Активные проверки слабых паролей MySQL/PostgreSQL/MongoDB
+db-checks = ["pymongo", "PyMySQL", "psycopg2-binary"]
+
 [project.scripts]
 perimeter = "cli:main"
 
@@ -24,3 +28,10 @@ py-modules = ["cli", "database"]
 
 [tool.setuptools.packages.find]
 include = ["core*", "api*"]
+
+# Данные ставятся в <prefix>/share/perimeter/<тот же путь>, см. core/paths.py
+[tool.setuptools.data-files]
+"share/perimeter/knowledge_base" = ["knowledge_base/vulnerabilities.json"]
+"share/perimeter/assets" = ["assets/DejaVuSans.ttf"]
+"share/perimeter/core" = ["core/subdomains_wordlist.txt"]
+"share/perimeter/core/modules/dlp/rules" = ["core/modules/dlp/rules/*.yar"]

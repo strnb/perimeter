@@ -1,5 +1,6 @@
 import logging
 from typing import Optional
+from uuid import uuid4
 
 import httpx
 
@@ -10,8 +11,7 @@ logger = logging.getLogger(__name__)
 CHECK_NAME = "File Upload"
 TARGET_PATH = "/vulnerabilities/upload/"
 REQUEST_TIMEOUT = 3.0
-UPLOAD_FILENAME = "perimeter_shell.php"
-UPLOAD_MARKERS = ("successfully uploaded", UPLOAD_FILENAME)
+UPLOAD_MARKERS = ("successfully uploaded",)
 
 
 async def run_check(client: httpx.AsyncClient, base_url: str) -> Optional[WebFinding]:
@@ -19,11 +19,12 @@ async def run_check(client: httpx.AsyncClient, base_url: str) -> Optional[WebFin
     Тестирует механизм валидации расширений файлов при загрузке.
     """
     target_url = f"{base_url}{TARGET_PATH}"
+    filename = f"perimeter_{uuid4().hex[:8]}.php"
 
     # Имитируем отправку вредоносного PHP файла в памяти
     files = {
         "uploaded": (
-            UPLOAD_FILENAME,
+            filename,
             b"<?php echo \"PERIMETER_VERIFIED\"; ?>",
             "application/x-php",
         )
@@ -38,7 +39,9 @@ async def run_check(client: httpx.AsyncClient, base_url: str) -> Optional[WebFin
         html_response = response.text.lower()
 
         # Проверяем маркеры успешной загрузки файла веб-сервером
-        if any(marker in html_response for marker in UPLOAD_MARKERS):
+        # shortcut: файл остаётся на DVWA-стенде; чистить вручную,
+        # для чужих серверов проверку не запускать
+        if any(marker in html_response for marker in UPLOAD_MARKERS) or filename in html_response:
             return WebFinding(
                 url=target_url,
                 vuln_type="Unrestricted File Upload",

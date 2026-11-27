@@ -12,6 +12,10 @@ cd perimeter-cli
 pip install -e .
 ```
 
+Проверки слабых паролей MySQL/PostgreSQL/MongoDB включаются отдельно:
+`pip install -e ".[db-checks]"`. Без них сканер честно пишет
+«проверка слабых паролей недоступна» в баннере порта.
+
 После этого команда `perimeter` доступна из любой директории.
 
 ## Команды
@@ -32,7 +36,25 @@ perimeter clear --yes            # очистка истории
 ```
 
 Результаты сканов автоматически пишутся в `perimeter.db` (в папке проекта),
-vault хранится в `vault/` там же. Отчёты `--report` — в `./reports` текущей директории.
+vault хранится в `vault/` там же. После обычного `pip install .` (не `-e`)
+изменяемые данные уходят в `~/.perimeter/`. Отчёты `--report` — в `./reports`
+текущей директории. Секреты в отчётах по умолчанию маскируются; полные
+значения — только с `perimeter dlp ... --show-secrets`.
+
+### Что ищет DLP
+
+Пароли и токены в любых текстовых файлах (`password:`, `DB_PASSWORD=`,
+`api_key =`, JSON/YAML/TOML), приватные ключи (RSA, EC, OpenSSH, PKCS#8,
+PGP, PuTTY), API-ключи AWS/GitHub/GitLab/OpenAI/Stripe/Slack/Google/
+SendGrid/npm/DigitalOcean/Telegram, JWT, строки подключения с паролем
+(`postgres://user:pass@host`), файлы хешей паролей, `.netrc` и дампы из
+5+ секретов в одном файле.
+
+Пропускаются: зависимости (`node_modules`, `venv`), сборки (`dist`, `build`,
+`target`), `.git`, lock-файлы, минифицированный код, двоичные файлы и файлы
+больше 1 МБ. Нечитаемые/пропущенные файлы видны в итоговой строке скана.
+YARA-правила проверяют только то, что не выразить одной строкой; если YARA
+недоступна, DLP продолжает работать на regex-детекторах и предупреждает об этом.
 
 Полная справка по модулю: `perimeter <команда> -h` (описание, аргументы, примеры).
 Примеры в справке — на любой ОС: пути можно писать как `~/project`, так и `C:\project`.
@@ -64,5 +86,6 @@ perimeter completion powershell | Add-Content $PROFILE
 ## Тест
 
 ```bash
-python test_cli.py
+python tests/test_cli.py   # CLI, сеть, PDF, vault
+python tests/test_dlp.py   # DLP и YARA: находки, ложные срабатывания, лимиты
 ```

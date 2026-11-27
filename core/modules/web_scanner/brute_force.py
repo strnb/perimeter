@@ -30,15 +30,18 @@ async def run_check(client: httpx.AsyncClient, base_url: str) -> Optional[WebFin
 
     try:
         responses = await asyncio.gather(*tasks, return_exceptions=True)
-        success_count = sum(1 for r in responses if isinstance(r, httpx.Response) and r.status_code == 200)
+        # DVWA отвечает 200 и на неудачный вход, поэтому 200 сам по себе — не успех.
+        # Блокировку видно по 429/403, а «нет лимита» — когда все попытки обработаны.
+        blocked = any(isinstance(r, httpx.Response) and r.status_code in (429, 403)
+                      for r in responses)
+        processed = sum(1 for r in responses if isinstance(r, httpx.Response) and r.status_code == 200)
 
-        # Если веб-сервер успешно вернул страницу для всех попыток без задержек и капчи
-        if success_count == ATTEMPTS:
+        if not blocked and processed == ATTEMPTS:
             return WebFinding(
                 url=target_url,
                 vuln_type="Brute Force / No Rate Limiting",
                 severity="HIGH",
-                detail="Веб-форма авторизации не блокирует сессию и не активирует CAPTCHA при атаке методом перебора.",
+                detail="Форма логина обработала 10 попыток подряд без блокировки, задержки и CAPTCHA.",
                 kb_id="VULN-034",
             )
     except Exception as exc:

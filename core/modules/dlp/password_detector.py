@@ -1,37 +1,34 @@
 import re
 from pathlib import Path
 from .results import Finding
-from .patterns import PASSWORD_PATTERNS, PASSWORD_EXCLUSIONS
+from .patterns import PASSWORD_RULES, TOKEN_PATTERNS, is_placeholder
 
-PASSWORD_FILE_EXTENSIONS = {".env", ".cfg", ".ini", ".conf"}
+# Известные форматы токенов уже нашёл token_detector — не дублируем их как generic_api_key
+_TOKEN_REGEXES = [re.compile(pattern) for pattern, _, _ in TOKEN_PATTERNS.values()]
+
 
 def detect_passwords(file: Path, lines: list[str]) -> list[Finding]:
-    # Пропустить файл если его расширение не в списке
-    if file.suffix not in PASSWORD_FILE_EXTENSIONS:
-        return []
-
     findings = []
 
     for line_number, line in enumerate(lines, start=1):
-        for pattern in PASSWORD_PATTERNS:
-            match = re.search(pattern, line)
+        for pattern, finding_type, severity, kb_id in PASSWORD_RULES:
+            match = pattern.search(line)
             if not match:
                 continue
 
-            value = line.split("=", 1)[1].strip().strip("\"'")
-
-            if value in PASSWORD_EXCLUSIONS:
+            value = match.group("value").strip().strip("\"'")
+            if is_placeholder(value):
+                continue
+            if finding_type == "generic_api_key" and any(r.search(value) for r in _TOKEN_REGEXES):
                 continue
 
-            severity = "high" if len(value) < 12 else "medium"
-
             findings.append(Finding(
-                type="password",
+                type=finding_type,
                 severity=severity,
                 file=str(file),
                 line=line_number,
-                    kb_id="VULN-006",
-                    value=value[:40],
-                ))
+                value=value[:40],
+                kb_id=kb_id,
+            ))
 
     return findings

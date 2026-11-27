@@ -3,7 +3,21 @@ __pycache__/
 *.egg-info/
 build/
 dist/
+
+# Виртуальные окружения
+.venv/
+venv/
+env/
+
+# Кеши инструментов
+.pytest_cache/
+.mypy_cache/
+.coverage
+htmlcov/
+
+# Изменяемые данные приложения (SQLite пишет и -journal/-wal рядом)
 perimeter.db
-vault/
+perimeter.db-*
+/vault/
 reports/
 *.pdf

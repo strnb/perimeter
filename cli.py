@@ -71,7 +71,8 @@ def _save_report_flag(args, findings):
 # ---------------------------------------------------------------------------
 
 def cmd_dlp(args):
-    findings = api.scan_dlp(args.path)
+    stats = {}
+    findings = api.scan_dlp(args.path, show_secrets=getattr(args, "show_secrets", False), stats=stats)
     if findings and "error" in findings[0]:
         print(f"[-] {findings[0]['error']}")
         return 1
@@ -98,6 +99,17 @@ def cmd_dlp(args):
         print("[+] Угроз не обнаружено")
     database.save_dlp_result(_now(), args.path, critical, medium, low)
     print(f"\nИтого: критических {critical}, средних {medium}, низких {low}")
+    if stats:
+        skipped = [
+            f"{label} {stats[key]}"
+            for key, label in (("skipped_binary", "бинарных"), ("skipped_big", "больших"),
+                               ("skipped_unreadable", "нечитаемых"))
+            if stats.get(key)
+        ]
+        note = f" (пропущено: {', '.join(skipped)})" if skipped else ""
+        print(f"Проверено файлов: {stats.get('scanned', 0)}{note}")
+        if stats.get("yara_failed"):
+            print("[!] YARA-правила недоступны — работают только regex-детекторы.")
     _save_report_flag(args, findings)
     return 0
 
@@ -124,6 +136,7 @@ def cmd_scan(args):
         rows = port_vulns or [{}]
         for vuln in rows:
             details.append({
+                "host": f["host"],
                 "port": f["port"], "service": f["service"], "banner": f["banner"],
                 "vulnerability_title": vuln.get("title"), "severity": vuln.get("severity"),
             })
@@ -239,10 +252,10 @@ def cmd_history(args):
             print("  " + " | ".join(f"{c}={v}" for c, v in zip(cols, row)))
             if table == "network_results":
                 cursor.execute(
-                    "SELECT port, vulnerability_title, severity FROM network_details "
+                    "SELECT host, port, vulnerability_title, severity FROM network_details "
                     "WHERE result_id = ? AND vulnerability_title IS NOT NULL", (row[0],))
-                for port, vuln_title, severity in cursor.fetchall():
-                    print(f"    ↳ порт {port}: {vuln_title} ({severity})")
+                for host, port, vuln_title, severity in cursor.fetchall():
+                    print(f"    ↳ {host or '?'}:{port}: {vuln_title} ({severity})")
     conn.close()
     return 0
 
@@ -411,6 +424,8 @@ def build_parser():
     )
     p.add_argument("path", metavar="PATH", help="папка для сканирования")
     p.add_argument("--report", action="store_true", help="сохранить JSON/TXT отчёт в ./reports")
+    p.add_argument("--show-secrets", action="store_true",
+                   help="печатать и сохранять секреты полностью (по умолчанию маскируются)")
     p.set_defaults(func=cmd_dlp)
 
     p = _add(

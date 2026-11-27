@@ -1,5 +1,6 @@
 import logging
 from typing import Optional
+from urllib.parse import urlsplit
 
 import httpx
 
@@ -28,8 +29,10 @@ async def run_check(client: httpx.AsyncClient, base_url: str) -> Optional[WebFin
             timeout=REQUEST_TIMEOUT,
         )
 
-        # Если статус ответа 301/302 (Redirect) и Location ведет на внешний домен
-        if response.status_code in (301, 302) and response.headers.get("Location") == EXTERNAL_DOMAIN:
+        # 301/302/303/307/308, Location может быть с завершающим слешем
+        location = response.headers.get("Location", "")
+        external_host = urlsplit(EXTERNAL_DOMAIN).netloc
+        if response.status_code in (301, 302, 303, 307, 308) and urlsplit(location).netloc == external_host:
             return WebFinding(
                 url=target_url,
                 vuln_type="Open HTTP Redirect",

@@ -3,14 +3,16 @@ import logging
 import os
 from datetime import datetime
 from typing import List, Dict, Any, Optional, TypedDict
+from uuid import uuid4
 
 import whois
 import dns.resolver
+from core.paths import resource_path
 
 # Настройка логгера для модуля
 logger = logging.getLogger(__name__)
 
-_DEFAULT_WORDLIST = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "subdomains_wordlist.txt")
+_DEFAULT_WORDLIST = str(resource_path("core/subdomains_wordlist.txt"))
 
 class WhoisData(TypedDict):
     registrar: str
@@ -102,9 +104,7 @@ async def _resolve_subdomain(subdomain_full: str, semaphore: asyncio.Semaphore, 
 async def find_subdomains(domain: str, wordlist_path: str = _DEFAULT_WORDLIST) -> List[Dict[str, str]]:
     """Асинхронный брутфорс поддоменов."""
     if not os.path.exists(wordlist_path):
-        # ВАЖНО: путь по умолчанию относителен текущей рабочей директории (CWD),
-        # а не расположения этого файла. Если запустить программу не из корня
-        # проекта — wordlist "потеряется" молча, без видимой ошибки для юзера.
+        # Путь по умолчанию ищется в репозитории или share/perimeter (core/paths.py)
         logger.error(f"Wordlist not found: {wordlist_path} (cwd={os.getcwd()})")
         return []
 
@@ -118,6 +118,12 @@ async def find_subdomains(domain: str, wordlist_path: str = _DEFAULT_WORDLIST) -
     resolver.lifetime = 2.0
 
     semaphore = asyncio.Semaphore(50)
+
+    # Проверяем wildcard: случайный несуществующий префикс не должен резолвиться
+    random_prefix = f"perimeter-wildcard-{uuid4().hex[:8]}"
+    wildcard = await _resolve_subdomain(f"{random_prefix}.{domain}", semaphore, resolver)
+    wildcard_ip = wildcard["ip"] if wildcard else None
+
     tasks = [
         _resolve_subdomain(f"{sub}.{domain}", semaphore, resolver)
         for sub in sub_prefixes
@@ -125,6 +131,11 @@ async def find_subdomains(domain: str, wordlist_path: str = _DEFAULT_WORDLIST) -
 
     logger.info(f"Starting subdomain brute for {domain} ({len(tasks)} tasks)")
     results = await asyncio.gather(*tasks)
+    if wildcard_ip:
+        logger.warning(f"{domain}: wildcard DNS (*.{domain} -> {wildcard_ip}), шум отфильтрован")
+        # shortcut: сравниваем только первый A-адрес; при нескольких IP wildcard
+        # отфильтруется частично — расширить, если зона начнёт шуметь
+        results = [res for res in results if res and res["ip"] != wildcard_ip]
     return [res for res in results if res]
 
 async def run_osint(domain: str, wordlist_path: str = _DEFAULT_WORDLIST) -> OSINTReport:

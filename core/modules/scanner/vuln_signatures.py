@@ -50,19 +50,18 @@ BANNER_SIGNATURES = [
     (re.compile(r"unreal", re.I), "CRITICAL", "CVE-2010-2075",
      "UnrealIRCd — Backdoor Command Execution",
      "Переустановить с чистого источника, обновить UnrealIRCd, заблокировать порт 6667/6697."),
-
-    (re.compile(r"tomcat|coyote", re.I), "HIGH", "Default Credentials",
-     "Apache Tomcat Manager — типичные дефолтные креды (tomcat:tomcat)",
-     "Сменить дефолтные учетные данные Manager-приложения, ограничить доступ к /manager."),
-
-    (re.compile(r"postgresql", re.I), "MEDIUM", "Weak/Default Credentials",
-     "PostgreSQL — потенциально слабые учетные данные (postgres:postgres)",
-     "Сменить пароль postgres, ограничить доступ по IP/файрволу."),
-
-    (re.compile(r"vnc", re.I), "HIGH", "Weak Authentication",
-     "VNC — слабая аутентификация (часто пароль 'password')",
-     "Использовать сложный пароль и/или туннелировать VNC через SSH/VPN."),
 ]
+
+# Только при подтверждении активной проверкой (в баннере есть VULNERABLE).
+# Иначе любой открытый Tomcat/PostgreSQL получал бы ложную уязвимость по имени сервиса.
+ACTIVE_CONFIRMED_RULES = {
+    8180: ("HIGH", "Default Credentials",
+           "Apache Tomcat Manager — дефолтные креды tomcat:tomcat",
+           "Сменить дефолтные учетные данные Manager-приложения, ограничить доступ к /manager."),
+    5432: ("MEDIUM", "Weak/Default Credentials",
+           "PostgreSQL — слабые учетные данные (postgres:postgres)",
+           "Сменить пароль postgres, ограничить доступ по IP/файрволу."),
+}
 
 # --- Сигнатуры по номеру порта — для протоколов, которые не шлют банер сами ---
 # (rlogin/rsh/ingreslock/X11/drb не присылают читаемый баннер на простой connect,
@@ -87,12 +86,11 @@ PORT_SIGNATURES = {
            "Баннер не всегда виден до NICK/USER — проверить версию вручную."),
     6697: ("MEDIUM", "Possible UnrealIRCd Backdoor", "Обнаружен IRC-сервис (SSL)",
            "См. порт 6667 — тот же сервис, проверить версию вручную."),
-    139: ("HIGH", "Possible CVE-2007-2447", "Обнаружен SMB/NetBIOS (Samba)",
-          "SMB не присылает версию на пассивный коннект — нужен активный Negotiate Protocol запрос. "
-          "На Metasploitable 2 это исторически Samba 3.0.20 с usermap_script RCE. Проверить вручную: "
-          "smbclient -L //<host>/ или enum4linux."),
-    445: ("HIGH", "Possible CVE-2007-2447", "Обнаружен SMB/NetBIOS (Samba)",
-          "См. порт 139 — тот же сервис."),
+    139: ("HIGH", "SMB exposed", "SMB/NetBIOS открыт из сети",
+          "Закрыть SMB/NetBIOS снаружи. Версию Samba пассивный коннект не показывает — "
+          "проверить вручную: smbclient -L //<host>/ или enum4linux."),
+    445: ("HIGH", "SMB exposed", "SMB/NetBIOS открыт из сети",
+          "Закрыть SMB/NetBIOS снаружи. См. порт 139 — тот же сервис."),
 }
 
 # --- Generic-правила 1:1 с контрактом knowledge_base/vulnerabilities.json (Миша) ---
@@ -125,7 +123,8 @@ def match_vulnerabilities(scan_results: list) -> list[VulnFinding]:
     findings = []
 
     for r in scan_results:
-        text = f"{r.service or ''} {r.banner or ''}"
+        # Только баннер: имя сервиса (postgresql/http-tomcat/vnc) не доказывает версию
+        text = r.banner or ""
 
         for pattern, severity, cve, title, rec in BANNER_SIGNATURES:
             if pattern.search(text):
@@ -134,6 +133,14 @@ def match_vulnerabilities(scan_results: list) -> list[VulnFinding]:
                     banner=r.banner or "", cve=cve, severity=severity,
                     title=title, recommendation=rec,
                 ))
+
+        if r.port in ACTIVE_CONFIRMED_RULES and "VULNERABLE" in text:
+            severity, cve, title, rec = ACTIVE_CONFIRMED_RULES[r.port]
+            findings.append(VulnFinding(
+                host=r.host, port=r.port, service=r.service,
+                banner=r.banner or "", cve=cve, severity=severity,
+                title=title, recommendation=rec,
+            ))
 
         if r.port in PORT_SIGNATURES:
             severity, cve, title, rec = PORT_SIGNATURES[r.port]
