@@ -391,6 +391,11 @@ def cmd_pipeline(args):
     return 0
 
 
+def cmd_rev(args):
+    # сквозной проброс в ctfkit: всё после 'rev' — его подкоманда и аргументы
+    return api.run_revpwn(args.args)
+
+
 def cmd_vault(args):
     if args.vault_cmd == "list":
         for name in api.vault_list():
@@ -582,7 +587,7 @@ def _suggest_command(word: str) -> str:
 
 MAIN_EPILOG = """\
 Группы:  секреты — dlp, vault | сеть — scan, osint, pipeline | веб — web
-         отчёты — report, history, clear | оболочка — completion
+         ctf — rev | отчёты — report, history, clear | оболочка — completion
 
 Примеры:
   perimeter dlp ~/project --report
@@ -591,6 +596,7 @@ MAIN_EPILOG = """\
   perimeter osint example.com --active --report
   perimeter pipeline example.com --scan --concurrency 20
   perimeter web 192.168.1.10 --port 4280 --cookie session=abc
+  perimeter rev triage ./chall
   perimeter vault save github_token
   perimeter history --limit 10
 
@@ -724,6 +730,25 @@ def build_parser():
                    help="сколько хостов сканировать одновременно (по умолчанию 10)")
     p.add_argument("--json", metavar="PATH", help="сохранить полный отчёт в JSON")
     p.set_defaults(func=cmd_pipeline)
+
+    p = _add(
+        sub, "rev", "CTF rev/pwn-помощник (ctfkit): триаж ELF, ROP, эксплойты",
+        "Фасад над встроенным ctfkit (rev-pwn): триаж Linux ELF x86-64,\n"
+        "генерация скелетов эксплойтов, ROP/GOT/libc/heap-хелперы.\n"
+        "Всё после 'rev' уходит в ctfkit как есть. Базовый режим работает без\n"
+        "зависимостей (readelf/objdump/nm), полная точность — с pwntools\n"
+        "(pip install perimeter[revpwn]). Часть команд требует Linux-тулзы\n"
+        "(gdb, patchelf, one_gadget).\n"
+        "Без аргументов печатает справку ctfkit со списком подкоманд.",
+        "Примеры:\n"
+        "  perimeter rev                 # список подкоманд ctfkit\n"
+        "  perimeter rev triage ./chall\n"
+        "  perimeter rev pwn ./chall\n"
+        "  perimeter rev rop ./chall",
+    )
+    p.add_argument("args", nargs=argparse.REMAINDER, metavar="...",
+                   help="подкоманда ctfkit и её аргументы (напр. triage ./chall)")
+    p.set_defaults(func=cmd_rev)
 
     p = _add(
         sub, "vault", "шифрованное хранилище секретов",

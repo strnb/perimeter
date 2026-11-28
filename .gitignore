@@ -15,6 +15,10 @@ env/
 .coverage
 htmlcov/
 
+# IDE
+.idea/
+.vscode/
+
 # Изменяемые данные приложения (SQLite пишет и -journal/-wal рядом)
 perimeter.db
 perimeter.db-*

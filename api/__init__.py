@@ -22,6 +22,7 @@ from .network import scan_network
 from .osint import run_osint_report
 from .web import scan_web
 from .pipeline import run_combined_pipeline
+from .revpwn import run_revpwn, revpwn_available
 
 __all__ = [
     # knowledge base
@@ -45,4 +46,7 @@ __all__ = [
     "run_osint_report",
     "scan_web",
     "run_combined_pipeline",
+    # ctf rev/pwn (ctfkit)
+    "run_revpwn",
+    "revpwn_available",
 ]
